@@ -1,6 +1,7 @@
 import logging
 from opensourceleg.hardware import UnitsDefinition, DEFAULT_UNITS
 from smbus2 import SMBus
+from smbus2 import I2cFunc
 import time
 import numpy as np
 from abc import ABC, abstractmethod
@@ -151,6 +152,7 @@ class AS5048A_Encoder(Encoder):
 
     def _open(self) -> None:
         self._SMBus = SMBus(self.bus)
+        self.logger.debug(f"[OPEN] SMBUS func: {self._SMBus.funcs:>08x} \n\r" + str(I2cFunc(self._SMBus.funcs)))
         self._update()
         self._isOpen = True
 
@@ -158,12 +160,12 @@ class AS5048A_Encoder(Encoder):
         self._SMBus.close()
         self._isOpen = False
 
-    def _calculateI2CAdress(a1: int, a2: int) -> int:
+    def _calculateI2CAdress(a1: bool, a2: bool) -> int:
         # (a1, a2) = adress_pins
-        return AS5048A_Encoder.I2C_BASE_ADR_7BIT | ((a2 & 0b1) << 1) | ((a1 & 0b1) << 0)
+        return AS5048A_Encoder.I2C_BASE_ADR_7BIT | ((bool(a2)) << 1) | ((bool(a1)) << 0)
     
-    def _get14Bit(bytesToParse) -> int:
-        return int((bytesToParse[0] << 5) | bytesToParse[1])
+    def _get14Bit(bytesToParse: bytes) -> int:
+        return int((bytesToParse[0] << 6) | bytesToParse[1])
     
     def _readRegisters(self, register, len) -> bytes:
         return bytes(self._SMBus.read_i2c_block_data(self.addr, register, len))
@@ -214,7 +216,7 @@ class AS5048A_Encoder(Encoder):
             float
         """
         encAngleData = AS5048A_Encoder._get14Bit(self._encData_new[4:6])
-        return encAngleData * (2 * np.pi)  / self.max_encoder_counts
+        return (encAngleData * 2 * np.pi)  / self.max_encoder_counts
 
     @property
     def encoder_velocity(self) -> float:
