@@ -25,17 +25,13 @@ class Encoder(ABC):
             logging.basicConfig(
                 format="[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
                 datefmt="%I:%M:%S",
-                level=logging.DEBUG,
+                level=self.debug_level,
             )
         self.name = name
         self._state = None
         self._units = units if units else DEFAULT_UNITS
         self._isOpen = False
         self.max_encoder_counts = encoder_res  # 14 bit encoder, so 14 bits!
-
-        self._encoder_angle = 0  # in encoder counts
-        self.joint_velocity = 0  # in encoder counts/sec
-        self.last_update_time = 0
 
     def __enter__(self) -> None:
         self.open()
@@ -89,6 +85,28 @@ class Encoder(ABC):
 
 
 class AS5048A_Encoder(Encoder):
+    """Class for the AS5048A encoder, implements the Encoder interface
+
+    https://www.mouser.com/datasheet/2/588/AS5048_DS000298_4_00-2324531.pdf
+
+
+    Args:
+        Encoder (_type_): _description_
+        bus (str): Path to the i2c bus ex. '/dev/i2c-1'
+        A1_adr_pin (int): State of the adress pin A1 on the AS5048A module
+        A2_adr_pin (int): State of the adress pin A1 on the AS5048A module
+        name (str): _description_
+        units (UnitsDefinition): _description_
+        debug_level (int): _description_
+    Raises:
+        KeyError: _description_
+        ValueError: _description_
+        KeyError: _description_
+
+    Returns:
+        _type_: _description_
+    """
+
     ENC_RESOLUTION = 2**14  # 14 bit resolution
 
     I2C_BASE_ADR_7BIT = (
@@ -113,7 +131,7 @@ class AS5048A_Encoder(Encoder):
 
     """Class for the AS5048A encoder, implements the Encoder interface
 
-        manual: https://www.mouser.com/datasheet/2/588/AS5048_DS000298_4_00-2324531.pdf
+    https://www.mouser.com/datasheet/2/588/AS5048_DS000298_4_00-2324531.pdf
 
 
     Args:

@@ -10,7 +10,7 @@ from opensourceleg.encoder import AS5048A_Encoder
 @pytest.fixture
 def enc_obj(mock_smbus):
     "Test docstring"
-    obj = AS5048A_Encoder(bus="/dev/null")
+    obj = AS5048A_Encoder(bus="/dev/null", debug_level=10)
     return obj
 
 
@@ -24,7 +24,26 @@ def enc_obj_open(mocker, enc_obj: AS5048A_Encoder):
 def mock_i2c_return_data(mocker, data: bytes):
     m = mocker.patch("smbus2.SMBus.read_i2c_block_data")
     m.return_value = data
-    return m
+    return
+
+
+def mock_encoder_data_reg_state(
+    mocker,
+    agc: int = 0,
+    diag: int = AS5048A_Encoder.FLAG_OCF,
+    mag: int = 0,
+    angle: int = 0,
+):
+    regs = bytearray(6)
+    regs[0] = agc
+    regs[1] = diag
+    regs[2] = mag & 0xFF
+    regs[3] = (mag >> 8) & 0x3F
+    regs[4] = angle & 0xFF
+    regs[5] = (angle >> 8) & 0x3F
+
+    data = bytes(regs)
+    mock_i2c_return_data(mocker, data)
 
 
 def test_AS5048A_Encoder(enc_obj: AS5048A_Encoder, enc_obj_open: AS5048A_Encoder):
@@ -79,6 +98,43 @@ def test_readRegisters(mocker, enc_obj_open: AS5048A_Encoder, test_data: bytes):
     m = mock_i2c_return_data(mocker, test_data)
     assert enc_obj_open._isOpen == True
     assert enc_obj_open._readRegisters(5, len(bytes(test_data))) == test_data
+
+
+def test_encoder_velocity_zero(enc_obj_open: AS5048A_Encoder, mocker):
+    mock_encoder_data_reg_state(mocker, angle=0)
+    enc_obj_open.update()
+    enc_obj_open.update()
+    assert enc_obj_open.encoder_velocity == 0
+
+
+def test_encoder_velocity_sign(enc_obj_open: AS5048A_Encoder, mocker):
+    # Mock first position
+    mock_encoder_data_reg_state(mocker, angle=0)
+    enc_obj_open.update()
+    mock_encoder_data_reg_state(mocker, angle=1)
+    enc_obj_open.update()
+    pos = enc_obj_open.encoder_velocity
+    mock_encoder_data_reg_state(mocker, angle=0)
+    enc_obj_open.update()
+    neg = enc_obj_open.encoder_velocity
+    assert pos > 0
+    assert neg < 0
+
+
+def test_encoder_velocity_full_scale(enc_obj_open: AS5048A_Encoder, mocker):
+    # Mock first position
+    mock_encoder_data_reg_state(mocker, angle=0)
+    enc_obj_open.update()
+    mock_encoder_data_reg_state(mocker, angle=enc_obj_open.max_encoder_counts - 1)
+    enc_obj_open.update()
+    enc_obj_open._encData_old_timestamp = 0
+    enc_obj_open._encData_new_timestamp = 10**9  # 1s in ns
+
+    expected = 2 * pi - (1 / 10**14)
+    assert enc_obj_open.encoder_velocity == pytest.approx(
+        expected,
+        rel=AS5048A_Encoder.ENC_RESOLUTION,
+    )
 
 
 @pytest.mark.parametrize(
