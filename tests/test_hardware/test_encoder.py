@@ -152,3 +152,38 @@ def test_encoder_velocity_full_scale(enc_obj_open: AS5048A_Encoder, mocker):
 def test_calculateI2CAdress(a1, a2, expected):
     assert AS5048A_Encoder._calculateI2CAdress(a1, a2) == expected
     assert AS5048A_Encoder(A1_adr_pin=a1, A2_adr_pin=a2).addr == expected
+
+
+@pytest.mark.parametrize(
+    ("byteobject, value"),
+    [
+        (bytes([0, 0]), 0),
+        (bytes([0, 0x3F]), 0x3F),
+        (bytes([0xFF, 0xFF]), (2**14) - 1),
+        (bytes([0xFF, 0x3F]), (2**14) - 1),
+    ],
+)
+def test_get14Bit(byteobject: bytes, value: int):
+    assert value == AS5048A_Encoder._get14Bit(byteobject)
+    ##assert byteobject == AS5048A_Encoder._set14Bit(value)
+    ##assert AS5048A_Encoder._get14Bit(byteobject) == AS5048A_Encoder._set14Bit(value)
+
+
+@pytest.mark.parametrize(
+    ("byteobject, value, raises"),
+    [
+        (bytes([0, 0]), 0, None),
+        (bytes([0, 0x3F]), 0x3F, None),
+        (bytes([0xFF, 0x3F]), (2**14) - 1, None),
+        (bytes([0xFF, 0xFF]), (2**14), OverflowError),
+    ],
+)
+def test_set14Bit(byteobject: bytes, value: int, raises):
+    if raises:
+        with pytest.raises(raises):
+            assert byteobject == AS5048A_Encoder._set14Bit(value)
+            assert value == AS5048A_Encoder._get14Bit(byteobject)
+    else:
+        assert byteobject == AS5048A_Encoder._set14Bit(value)
+        assert value == AS5048A_Encoder._get14Bit(byteobject)
+        assert value == AS5048A_Encoder._get14Bit(AS5048A_Encoder._set14Bit(value))
