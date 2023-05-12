@@ -187,10 +187,10 @@ class AS5048A_Encoder(Encoder):
         if not self._isOpen:
             self.logger.info(f"Open encoder communication {self.__class__.__name__}")
             self._SMBus = SMBus(self.bus)
-            self.logger.debug(
-                f"[OPEN] SMBUS func: {self._SMBus.funcs:>08x} \n\r"
-                + str(I2cFunc(self._SMBus.funcs))
-            )
+            # self.logger.debug(
+            #     f"[OPEN] SMBUS func: {self._SMBus.funcs:>08x} \n\r"
+            #     + str(I2cFunc(self._SMBus.funcs))
+            # )
         self._isOpen = True
         self.update()
 

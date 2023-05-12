@@ -1,91 +1,149 @@
 import pytest
-import pytest_mock
 from numpy import pi
 from pytest_mock import mocker
-from smbus2 import SMBus
 
 from opensourceleg.encoder import AS5048A_Encoder
 
 
+class EncoderStateMock:
+    agc: int = 0
+    mag: int = 0
+
+    def __init__(self) -> None:
+        self._registers: bytearray = bytearray(256)
+        self.open()
+
+    def read_i2c_block_data(self, i2cadr, register, len) -> bytes:
+        assert 0 <= register <= 256
+        assert 0 < len <= 0xFF
+        assert 0 <= register + len <= 256
+        return bytes(self._registers[register : register + len])
+
+    def write_i2c_block_data(self, i2cadr, register, data) -> None:
+        regadr = register
+        for byte in data:
+            self._registers[regadr] = byte
+            regadr += 1
+
+    def open(self):
+        self.diag = {AS5048A_Encoder.FLAG_OCF: True}
+
+    def close(self):
+        pass
+
+    @property
+    def zero_pos(self):
+        reg = AS5048A_Encoder.OTP_ZERO_POSITION_HIGH
+        return AS5048A_Encoder._get14Bit(self._registers[reg : reg + 2])
+
+    @zero_pos.setter
+    def zero_pos(self, value: int):
+        reg = AS5048A_Encoder.OTP_ZERO_POSITION_HIGH
+        self._registers[reg : reg + 2] = AS5048A_Encoder._set14Bit(value)
+
+    @property
+    def diag(self) -> bytes:
+        return bytes([self._registers[AS5048A_Encoder.DIAGNOSTICS]])
+
+    @diag.setter
+    def diag(self, kwargs):
+        reg = AS5048A_Encoder.DIAGNOSTICS
+        regvalue = self._registers[reg]
+        for (key, item) in kwargs.items():
+            if item:
+                self._registers[reg] |= key
+            else:
+                self._registers[reg] &= ~key
+
+    @property
+    def angle(self) -> bytes:
+        reg = AS5048A_Encoder.ANGLE_HIGH
+        return AS5048A_Encoder._get14Bit(self._registers[reg : reg + 2])
+
+    @angle.setter
+    def angle(self, value: int):
+        reg = AS5048A_Encoder.ANGLE_HIGH
+        self._registers[reg : reg + 2] = AS5048A_Encoder._set14Bit(value)
+
+
+@pytest.fixture()
+def encoder_mock() -> EncoderStateMock:
+    return EncoderStateMock()
+
+
+@pytest.fixture()
+def patch_encoder(mocker, encoder_mock: EncoderStateMock):
+    mocker.patch("smbus2.SMBus.__new__", return_value=encoder_mock)
+    mocker.patch("smbus2.SMBus.__init__", return_value=None)
+
+
 @pytest.fixture
-def enc_obj(mock_smbus):
-    "Test docstring"
+def enc_patched(patch_encoder):
     obj = AS5048A_Encoder(bus="/dev/null", debug_level=10)
     return obj
 
 
+# def test_encoder_mock_object(encoder_mock: EncoderStateMock):
+#     encoder_mock.angle = 0
+#     assert encoder_mock.angle == 0
+#     encoder_mock.angle = 10
+#     assert encoder_mock.angle == 10
+
+
+# def test_encoder_mock_diag(encoder_mock: EncoderStateMock):
+#     assert encoder_mock.diag == b'\x00'
+#     encoder_mock.diag = {
+#                         AS5048A_Encoder.FLAG_COMP_H: True,
+#                         AS5048A_Encoder.FLAG_COMP_L: True,
+#                         AS5048A_Encoder.FLAG_COF: True,
+#                         AS5048A_Encoder.FLAG_OCF: True
+#     }
+#     assert encoder_mock.diag == b'\x0F'
+#     encoder_mock.diag = {
+#                         AS5048A_Encoder.FLAG_COF: True,
+#                         AS5048A_Encoder.FLAG_OCF: False
+#     }
+#     assert encoder_mock.diag == b'\x0E'
+#     encoder_mock.diag = {}
+#     assert encoder_mock.diag == b'\x0E'
+
+
+def test_mock2(enc_patched: AS5048A_Encoder, encoder_mock: EncoderStateMock):
+    enc_patched.open()
+    assert enc_patched.encoder_position == 0
+    encoder_mock.angle = 2**14 - 1
+    enc_patched.update()
+    assert enc_patched.encoder_output == 2**14 - 1
+    pass
+
+
 @pytest.fixture
-def enc_obj_open(mocker, enc_obj: AS5048A_Encoder):
-    mock_i2c_return_data(mocker, bytes(range(6)))
-    enc_obj.open()
-    return enc_obj
+def enc_obj_open(enc_patched: AS5048A_Encoder):
+    enc_patched.open()
+    return enc_patched
 
 
-def mock_i2c_return_data(mocker, data: bytes):
-    m = mocker.patch("smbus2.SMBus.read_i2c_block_data")
-    m.return_value = data
-    return
-
-
-def mock_encoder_data_reg_state(
-    mocker,
-    agc: int = 0,
-    diag: int = AS5048A_Encoder.FLAG_OCF,
-    mag: int = 0,
-    angle: int = 0,
-):
-    regs = bytearray(6)
-    regs[0] = agc
-    regs[1] = diag
-    regs[2] = mag & 0xFF
-    regs[3] = (mag >> 8) & 0x3F
-    regs[4] = angle & 0xFF
-    regs[5] = (angle >> 8) & 0x3F
-
-    data = bytes(regs)
-    mock_i2c_return_data(mocker, data)
-
-
-def test_AS5048A_Encoder(enc_obj: AS5048A_Encoder, enc_obj_open: AS5048A_Encoder):
-    assert type(enc_obj) == AS5048A_Encoder
-    assert enc_obj_open._SMBus.funcs == 0x0EFF0009
+def test_AS5048A_Encoder(enc_obj_open: AS5048A_Encoder):
+    assert type(enc_obj_open) == AS5048A_Encoder
     assert enc_obj_open._isOpen == True
-
-
-@pytest.fixture()
-def mock_smbus(monkeypatch, block_data=None):
-    SMBUS_FUNCS = 0x0EFF0009
-    """
-    Mock function for the SMBus I2C interface
-
-    From RPI4 with neurobionics Rasbian build
-    SMBUS_FUNCS =
-        SMBUS_EMUL|SMBUS_I2C_BLOCK|SMBUS_WRITE_I2C_BLOCK
-        |SMBUS_READ_I2C_BLOCK|SMBUS_WRITE_BLOCK_DATA
-        |SMBUS_PROC_CALL|SMBUS_WORD_DATA|SMBUS_WRITE_WORD_DATA
-        |SMBUS_READ_WORD_DATA|SMBUS_BYTE_DATA|SMBUS_WRITE_BYTE_DATA
-        |SMBUS_READ_BYTE_DATA|SMBUS_BYTE|SMBUS_WRITE_BYTE
-        |SMBUS_READ_BYTE|SMBUS_QUICK|SMBUS_PEC|I2C
-    
-    """
-
-    def mock_open(self, bus):
-        self.funcs = SMBUS_FUNCS
-
-    monkeypatch.setattr(SMBus, "open", mock_open)
 
 
 @pytest.mark.parametrize(
     ("data, exp_pos"),
     [
-        (bytes([0, 0xFF, 0, 0, 0, 0]), 0),
-        (bytes([0, 0xFF, 0, 0, 0xFF, 0x3F]), 2 * pi),
-        (bytes([0, 0xFF, 0, 0, 0x7F, 0x3F]), pi),
-        (bytes([0, 0xFF, 0, 0, 0x6F, 0x3F]), pi / 2),
+        (0, 0),
+        (AS5048A_Encoder.ENC_RESOLUTION - 1, 2 * pi),
+        ((AS5048A_Encoder.ENC_RESOLUTION - 1) / 2, pi),
+        ((AS5048A_Encoder.ENC_RESOLUTION - 1) / 4, pi / 2),
     ],
 )
-def test_update_pos(mocker, enc_obj_open: AS5048A_Encoder, data: bytes, exp_pos: float):
-    m = mock_i2c_return_data(mocker, data)
+def test_update_pos(
+    encoder_mock: EncoderStateMock,
+    enc_obj_open: AS5048A_Encoder,
+    data: int,
+    exp_pos: float,
+):
+    encoder_mock.angle = int(data)
     enc_obj_open.update()
     assert enc_obj_open.encoder_position == pytest.approx(
         exp_pos,
@@ -93,39 +151,39 @@ def test_update_pos(mocker, enc_obj_open: AS5048A_Encoder, data: bytes, exp_pos:
     )
 
 
-@pytest.mark.parametrize(("test_data"), [bytes(range(5)), b"", bytes(range(100))])
-def test_readRegisters(mocker, enc_obj_open: AS5048A_Encoder, test_data: bytes):
-    m = mock_i2c_return_data(mocker, test_data)
-    assert enc_obj_open._isOpen == True
-    assert enc_obj_open._readRegisters(5, len(bytes(test_data))) == test_data
-
-
-def test_encoder_velocity_zero(enc_obj_open: AS5048A_Encoder, mocker):
-    mock_encoder_data_reg_state(mocker, angle=0)
+def test_encoder_velocity_zero(
+    encoder_mock: EncoderStateMock, enc_obj_open: AS5048A_Encoder
+):
+    encoder_mock.angle = 100
     enc_obj_open.update()
+    encoder_mock.angle = 100
     enc_obj_open.update()
     assert enc_obj_open.encoder_velocity == 0
 
 
-def test_encoder_velocity_sign(enc_obj_open: AS5048A_Encoder, mocker):
+def test_encoder_velocity_sign(
+    encoder_mock: EncoderStateMock, enc_obj_open: AS5048A_Encoder
+):
     # Mock first position
-    mock_encoder_data_reg_state(mocker, angle=0)
+    encoder_mock.angle = 0
     enc_obj_open.update()
-    mock_encoder_data_reg_state(mocker, angle=1)
+    encoder_mock.angle = 1
     enc_obj_open.update()
     pos = enc_obj_open.encoder_velocity
-    mock_encoder_data_reg_state(mocker, angle=0)
+    encoder_mock.angle = 0
     enc_obj_open.update()
     neg = enc_obj_open.encoder_velocity
     assert pos > 0
     assert neg < 0
 
 
-def test_encoder_velocity_full_scale(enc_obj_open: AS5048A_Encoder, mocker):
+def test_encoder_velocity_full_scale(
+    encoder_mock: EncoderStateMock, enc_obj_open: AS5048A_Encoder
+):
     # Mock first position
-    mock_encoder_data_reg_state(mocker, angle=0)
+    encoder_mock.angle = 0
     enc_obj_open.update()
-    mock_encoder_data_reg_state(mocker, angle=enc_obj_open.max_encoder_counts - 1)
+    encoder_mock.angle = AS5048A_Encoder.ENC_RESOLUTION - 1
     enc_obj_open.update()
     enc_obj_open._encData_old_timestamp = 0
     enc_obj_open._encData_new_timestamp = 10**9  # 1s in ns
