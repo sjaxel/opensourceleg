@@ -6,6 +6,7 @@ import numpy as np
 from smbus2 import I2cFunc, SMBus
 
 from opensourceleg.hardware import DEFAULT_UNITS, UnitsDefinition
+from opensourceleg.utilities import twos_compliment
 
 
 class Encoder(ABC):
@@ -22,11 +23,6 @@ class Encoder(ABC):
             self.logger = logger.getChild(name)
         else:
             self.logger = logging.getLogger(name)
-            logging.basicConfig(
-                format="[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
-                datefmt="%I:%M:%S",
-                level=self.debug_level,
-            )
         self.name = name
         self._state = None
         self._units = units if units else DEFAULT_UNITS
@@ -49,39 +45,46 @@ class Encoder(ABC):
     def open(self) -> None:
         if not self._isOpen:
             self._open()
-            self.logger.info("Open encoder communication")
-
-    @abstractmethod
-    def _open(self) -> None:
-        raise NotImplementedError("Subclass must implement _open() function")
+            self.logger.info(f"Open encoder communication {self.__class__.__name__}")
 
     def close(self) -> None:
         if self._isOpen:
             self._close()
 
     @abstractmethod
-    def _close(self) -> None:
-        raise NotImplementedError("Subclass must implement _close() function")
-
     def update(self) -> None:
-        if self._isOpen:
-            self._update()
-        else:
-            raise OSError("Bus needs to be opened before calling update")
-
-    @abstractmethod
-    def _update(self) -> None:
-        raise NotImplementedError("Subclass must implement _update function")
+        pass
 
     @property
     @abstractmethod
-    def encoder_position(self):
-        raise NotImplementedError("Subclass must implement encoder_position property")
+    def encoder_position(self) -> float:
+        """Get the encoder position in rad [-π, π] around the zero position
+
+        Returns:
+            float: Encoder position in rad [-π, π]
+        """
+        pass
 
     @property
     @abstractmethod
-    def encoder_velocity(self):
-        raise NotImplementedError("Subclass must implement encoder_velocity property")
+    def encoder_output(self) -> int:
+        """Get the raw encoder output as counts of full scale output.
+
+        Returns:
+            int: Encoder output in counts [0, FS]
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def encoder_velocity(self) -> float:
+        """
+        The encoder position in rad as offset from the programmed zero position
+
+        Returns:
+            float: Encoder velocity (rad/s)
+        """
+        pass
 
 
 class AS5048A_Encoder(Encoder):
@@ -142,6 +145,7 @@ class AS5048A_Encoder(Encoder):
         name (str): _description_
         units (UnitsDefinition): _description_
         debug_level (int): _description_
+
     Raises:
         KeyError: _description_
         ValueError: _description_
@@ -166,25 +170,28 @@ class AS5048A_Encoder(Encoder):
         )
         self.bus = bus
         self.addr = AS5048A_Encoder._calculateI2CAdress(A1_adr_pin, A2_adr_pin)
+        self._reset_data()
 
-        self._encData_old = bytes(6)
-        self._encData_old_timestamp = 0
-        self._encData_new = bytes(6)
-        self._encData_new_timestamp = 0
-
-    def _open(self) -> None:
-        self._SMBus = SMBus(self.bus)
-        self.logger.debug(
-            f"[OPEN] SMBUS func: {self._SMBus.funcs:>08x} \n\r"
-            + str(I2cFunc(self._SMBus.funcs))
-        )
-        self._update()
+    def open(self) -> None:
+        if not self._isOpen:
+            self.logger.info(f"Open encoder communication {self.__class__.__name__}")
+            self._SMBus = SMBus(self.bus)
         self._isOpen = True
+        self.update()
 
-    def _close(self) -> None:
-        if hasattr(self, "_SMBus"):
-            self._SMBus.close()
-        self._isOpen = False
+    def close(self) -> None:
+        if self._isOpen:
+            if hasattr(self, "_SMBus"):
+                self._SMBus.close()
+            self._isOpen = False
+            self._reset_data()
+
+    def update(self) -> None:
+        if self._isOpen:
+            self._readDataRegisters()
+            self._checkDiagnostics()
+        else:
+            raise OSError("Bus needs to be opened before calling update")
 
     @staticmethod
     def _calculateI2CAdress(a1: bool, a2: bool) -> int:
@@ -194,6 +201,32 @@ class AS5048A_Encoder(Encoder):
     @staticmethod
     def _get14Bit(bytesToParse: bytes) -> int:
         return int((bytesToParse[0] << 6) | bytesToParse[1])
+
+    @staticmethod
+    def _set14Bit(intToParse: int) -> bytes:
+        """
+        Convert a 14bit integer to bytes <msb[13:6]><lsb[5:0]>
+
+        Args
+            intToParse (int): The integer to convert to bytes
+
+        Raises
+            OverflowError: If intToParse >= 2^14
+        """
+        if intToParse >= AS5048A_Encoder.ENC_RESOLUTION:
+            raise OverflowError(
+                f"Argument intToParse={intToParse} >= 2^14 bit encoder resolution"
+            )
+        return bytes([(intToParse >> 6), intToParse & 0x3F])
+
+    def _reset_data(self) -> None:
+        self._encData_old = bytes(6)
+        self._encData_old_timestamp = 0
+        self._encData_new = bytes(6)
+        self._encData_new_timestamp = 0
+
+    def _writeRegisters(self, register: int, data: bytes) -> None:
+        self._SMBus.write_i2c_block_data(self.addr, register, data)
 
     def _readRegisters(self, register, len) -> bytes:
         return bytes(self._SMBus.read_i2c_block_data(self.addr, register, len))
@@ -229,35 +262,17 @@ class AS5048A_Encoder(Encoder):
         if self.diag_compL:
             self.logger.warning("High magnetic field comp triggered")
 
-    def _update(self):
-        self._readDataRegisters()
-        self._checkDiagnostics()
-
     @property
     def encoder_position(self) -> float:
-        """
-        The encoder position in rad as offset from the programmed zero position
+        signed_output = twos_compliment(self.encoder_output, 14)
+        return (signed_output * 2 * np.pi) / AS5048A_Encoder.ENC_RESOLUTION
 
-        Args:
-            None
-
-        Returns:
-            float
-        """
-        encAngleData = AS5048A_Encoder._get14Bit(self._encData_new[4:6])
-        return (encAngleData * 2 * np.pi) / self.max_encoder_counts
+    @property
+    def encoder_output(self) -> int:
+        return AS5048A_Encoder._get14Bit(self._encData_new[4:6])
 
     @property
     def encoder_velocity(self) -> float:
-        """
-        The encoder position in rad as offset from the programmed zero position
-
-        Args:
-            None
-
-        Returns:
-            Encoder velocity (rad/s)
-        """
         try:
             encAngleDataOld = AS5048A_Encoder._get14Bit(self._encData_old[4:6])
             encAngleDataNew = AS5048A_Encoder._get14Bit(self._encData_new[4:6])
@@ -275,6 +290,40 @@ class AS5048A_Encoder(Encoder):
                 / self.max_encoder_counts
                 / (timediff)
             )
+
+    @property
+    def zero_position_OTP(self) -> int:
+        """
+        Get:
+            Reads the content of the Zero position registers of the Encoder
+        Set:
+            Sets the zero position OTP registers (but does not burn them)
+
+        Args:
+            value (int): The zero position encoder offset
+
+        Raises:
+            OverflowError: If value >= 2^14
+
+        Returns:
+            int: The 14 bit value stored in the Zero offset OTP registers
+        """
+        registers = self._readRegisters(AS5048A_Encoder.OTP_ZERO_POSITION_HIGH, 2)
+        return AS5048A_Encoder._get14Bit(registers)
+
+    @zero_position_OTP.setter
+    def zero_position_OTP(self, value: int):
+        """
+
+        Args:
+            value (int):
+
+        Raises:
+            OverflowError: If value >= 2^14
+        """
+        enc.logger.info(f"[SET] Zero position OTP: {value}")
+        payload = AS5048A_Encoder._set14Bit(value)
+        self._writeRegisters(AS5048A_Encoder.OTP_ZERO_POSITION_HIGH, payload)
 
     @property
     def diag_compH(self) -> bool:
@@ -331,10 +380,26 @@ class AS5048A_Encoder(Encoder):
 
 
 if __name__ == "__main__":
-    enc = AS5048A_Encoder("/dev/i2c-1")
-    enc.open()
+
+    logging.basicConfig(
+        format="[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
+        datefmt="%I:%M:%S",
+        level=logging.INFO,
+    )
+    enc = AS5048A_Encoder(bus="/dev/i2c-1", logger=logging.getLogger())
     with enc:
+        enc.zero_position_OTP = 0
+        enc.update()
+        enc.logger.info(f"Zero registers: {enc.zero_position_OTP}")
+        enc.logger.info(f"Enc output: {enc.encoder_output}")
+        enc.zero_position_OTP = enc.encoder_output
+        enc.logger.info(f"Zero registers: {enc.zero_position_OTP}")
+        enc.logger.info(f"Enc output: {enc.encoder_output}")
+        enc.update()
+        enc.logger.info(f"Zero registers: {enc.zero_position_OTP}")
+        enc.logger.info(f"Enc output: {enc.encoder_output}")
+
         while True:
             enc.update()
-            enc.logger.info(enc)
+            enc.logger.info(f"Position: {enc.encoder_position:.3f}")
             time.sleep(2)
