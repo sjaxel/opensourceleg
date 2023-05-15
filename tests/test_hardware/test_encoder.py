@@ -3,6 +3,7 @@ from numpy import pi
 from pytest_mock import mocker
 
 from opensourceleg.encoder import AS5048A_Encoder
+from opensourceleg.utilities import twos_compliment
 
 
 class EncoderStateMock:
@@ -132,22 +133,27 @@ def test_AS5048A_Encoder(enc_obj_open: AS5048A_Encoder):
     ("data, exp_pos"),
     [
         (0, 0),
-        (AS5048A_Encoder.ENC_RESOLUTION - 1, 2 * pi),
-        ((AS5048A_Encoder.ENC_RESOLUTION - 1) / 2, pi),
-        ((AS5048A_Encoder.ENC_RESOLUTION - 1) / 4, pi / 2),
+        (1, (2 * pi) / AS5048A_Encoder.ENC_RESOLUTION),
+        (
+            AS5048A_Encoder.ENC_RESOLUTION - 1,
+            -(2 * pi) / AS5048A_Encoder.ENC_RESOLUTION,
+        ),
+        ((AS5048A_Encoder.ENC_RESOLUTION) * (3 / 4), -pi / 2),
+        ((AS5048A_Encoder.ENC_RESOLUTION) * (1 / 4), pi / 2),
     ],
 )
 def test_update_pos(
     encoder_mock: EncoderStateMock,
     enc_obj_open: AS5048A_Encoder,
     data: int,
-    exp_pos: float,
+    exp_pos: int,
 ):
     encoder_mock.angle = int(data)
     enc_obj_open.update()
+
     assert enc_obj_open.encoder_position == pytest.approx(
         exp_pos,
-        rel=AS5048A_Encoder.ENC_RESOLUTION,
+        rel=1 / AS5048A_Encoder.ENC_RESOLUTION,
     )
 
 

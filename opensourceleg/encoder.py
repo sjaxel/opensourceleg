@@ -6,6 +6,7 @@ import numpy as np
 from smbus2 import I2cFunc, SMBus
 
 from opensourceleg.hardware import DEFAULT_UNITS, UnitsDefinition
+from opensourceleg.utilities import twos_compliment
 
 
 class Encoder(ABC):
@@ -43,11 +44,9 @@ class Encoder(ABC):
 
     def open(self) -> None:
         if not self._isOpen:
-
             self._open()
             self.logger.info(f"Open encoder communication {self.__class__.__name__}")
 
-    @abstractmethod
     def close(self) -> None:
         if self._isOpen:
             self._close()
@@ -59,26 +58,20 @@ class Encoder(ABC):
     @property
     @abstractmethod
     def encoder_position(self) -> float:
-        """
-        The unsigned encoder position in rad[0, 2*pi] as offset
-        from the programmed zero position
-
-        Args:
-            None
+        """Get the encoder position in rad [-π, π] around the zero position
 
         Returns:
-            float: Unsigned offset in rad rad[0, 2*pi]
+            float: Encoder position in rad [-π, π]
         """
         pass
 
     @property
     @abstractmethod
-    def encoder_output(self) -> float:
-        """
-        The encoder output in counts as offset from the programmed zero position
+    def encoder_output(self) -> int:
+        """Get the raw encoder output as counts of full scale output.
 
         Returns:
-            int: Encoder output in counts[0, ENC_RESOLUTION-1]
+            int: Encoder output in counts [0, FS]
         """
         pass
 
@@ -177,20 +170,12 @@ class AS5048A_Encoder(Encoder):
         )
         self.bus = bus
         self.addr = AS5048A_Encoder._calculateI2CAdress(A1_adr_pin, A2_adr_pin)
-
-        self._encData_old = bytes(6)
-        self._encData_old_timestamp = 0
-        self._encData_new = bytes(6)
-        self._encData_new_timestamp = 0
+        self._reset_data()
 
     def open(self) -> None:
         if not self._isOpen:
             self.logger.info(f"Open encoder communication {self.__class__.__name__}")
             self._SMBus = SMBus(self.bus)
-            # self.logger.debug(
-            #     f"[OPEN] SMBUS func: {self._SMBus.funcs:>08x} \n\r"
-            #     + str(I2cFunc(self._SMBus.funcs))
-            # )
         self._isOpen = True
         self.update()
 
@@ -199,6 +184,7 @@ class AS5048A_Encoder(Encoder):
             if hasattr(self, "_SMBus"):
                 self._SMBus.close()
             self._isOpen = False
+            self._reset_data()
 
     def update(self) -> None:
         if self._isOpen:
@@ -232,6 +218,12 @@ class AS5048A_Encoder(Encoder):
                 f"Argument intToParse={intToParse} >= 2^14 bit encoder resolution"
             )
         return bytes([(intToParse >> 6), intToParse & 0x3F])
+
+    def _reset_data(self) -> None:
+        self._encData_old = bytes(6)
+        self._encData_old_timestamp = 0
+        self._encData_new = bytes(6)
+        self._encData_new_timestamp = 0
 
     def _writeRegisters(self, register: int, data: bytes) -> None:
         self._SMBus.write_i2c_block_data(self.addr, register, data)
@@ -272,18 +264,8 @@ class AS5048A_Encoder(Encoder):
 
     @property
     def encoder_position(self) -> float:
-        return (self.encoder_output * 2 * np.pi) / self.max_encoder_counts
-
-    @property
-    def encoder_position_signed(self) -> float:
-        """
-        The unsigned encoder position in rad[-pi, pi] as offset
-        from the programmed zero position
-
-        Returns:
-            float: Signed offset in rad rad[-pi, pi]
-        """
-        raise NotImplementedError()
+        signed_output = twos_compliment(self.encoder_output, 14)
+        return (signed_output * 2 * np.pi) / AS5048A_Encoder.ENC_RESOLUTION
 
     @property
     def encoder_output(self) -> int:
