@@ -341,3 +341,24 @@ def get_active_ports():
             pass
 
     return serial_ports
+
+
+def twos_compliment(value: int, bit_length: int) -> int:
+    """_summary_
+
+    Args:
+        value (int): The unsigned value to take 2's compliment from.
+        bit_length (int): _description_
+
+    Returns:
+        int: 2's compliment of the value given
+    """
+    assert type(value) == int
+    assert value >= 0
+    assert type(bit_length) == int
+    assert bit_length >= 0
+    assert value.bit_length() <= bit_length
+    if value >= 2 ** (bit_length - 1):
+        return value - (2**bit_length)
+    else:
+        return value
