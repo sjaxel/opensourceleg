@@ -1,11 +1,13 @@
 import logging
 import time
 from abc import ABC, abstractmethod, abstractproperty
+from dataclasses import dataclass, field
 
 import numpy as np
 from NeuroLocoMiddleware.SoftRealtimeLoop import SoftRealtimeLoop
 from TMotorCANControl.mit_can import TMotorManager_mit_can, _TMotorManState
 
+from opensourceleg.device import DeviceDriver, OSLDevice
 from opensourceleg.encoder import AS5048A_Encoder, Encoder
 from opensourceleg.hardware import (
     CONTROL_MODE,
@@ -17,87 +19,42 @@ from opensourceleg.hardware import (
     NM_PER_MILLIAMP,
     RAD_PER_COUNT,
     RAD_PER_DEG,
-    Gains,
     UnitsDefinition,
 )
 
 
-class Actpack(ABC):
-    """Abstract base class implementing the Actpack interface
+class Actpack(OSLDevice):
+    """_summary_
 
-    Attributes:
-        DEFAULT_IMPEDANCE_GAINS (Gains)
-
-    Raises:
-        KeyError: _description_
-        ValueError: _description_
-        KeyError: _description_
-
-    Returns:
-        _type_: _description_
+    Args:
+        OSLDevice (_type_): _description_
     """
-
-    @property
-    def DEFAULT_IMPEDANCE_GAINS(self) -> Gains:
-        """
-        Gains: Default impedence gains for the Actpack
-        """
-        pass
-
-    @property
-    def DEFAULT_CURRENT_GAINS(self) -> Gains:
-        """
-        Gains: Default current gains for the Actpack
-        """
-        pass
-
-    @property
-    def DEFAULT_POSITION_GAINS(self) -> Gains:
-        """
-        Gains: Default position gains for the Actpack
-        """
-        pass
 
     def __init__(
         self,
         name: str = "Actpack",
-        units: UnitsDefinition = DEFAULT_UNITS,
-        logger: logging.Logger = None,
-        debug_level: int = 0,
+        driver_type=type[DeviceDriver],
+        driver_args: dict = {},
+        **kwargs,
     ) -> None:
-        """
-        Initializes the Actpack class
+        """_summary_
 
         Args:
-
+            name (str): _description_. Defaults to "Actpack".
+            driver_type (type): _description_. Defaults to type[DeviceDriver].
+            driver_args (dict): _description_. Defaults to {}.
+            **kwargs (_type_): _description_.
         """
-        self._debug_level = debug_level
-        self._data: dict = None
-        if logger:
-            self._log = logger.getChild(name)
-        else:
-            self._log = logging.getLogger(name)
+        super().__init__(name=name, **kwargs)
 
-        self._state = None
-        self._units = units if units else DEFAULT_UNITS
+        self._data: dict = None
         self._mode = None
 
-        self._motor_zero_position = 0.0
-        self._joint_zero_position = 0.0
+        self._init_driver(driver_type, driver_args)
 
         self._modes: dict[str, ActpackMode] = {}
 
-    @abstractmethod
-    def start(self):
-        pass
-
-    @abstractmethod
-    def stop(self):
-        pass
-
-    @abstractmethod
-    def update(self):
-        pass
+        self._init_modes(driver_type)
 
     def set_mode(self, mode: str):
         if mode in self._modes:
@@ -109,428 +66,43 @@ class Actpack(ABC):
                 self._mode = self._modes[mode]
 
         else:
-            self._log.warning(f"Mode {mode} not found")
-            return
+            raise KeyError(f"Mode {mode} not found")
 
-    def set_motor_zero_position(self, position: float):
-        self._motor_zero_position = position
+    def _init_driver(self, driver_type: type[DeviceDriver], driver_args: dict) -> None:
+        if not issubclass(driver_type, DeviceDriver):
+            raise TypeError(f"driver_type must be a subclass of DeviceDriver")
+        self._driver = driver_type({**driver_args, **{"parent_logger": self._log}})
 
-    def set_joint_zero_position(self, position: float):
-        self._joint_zero_position = position
+    def _init_modes(self, driver_type) -> None:
 
-    def set_position_gains(
-        self,
-        gains: Gains = DEFAULT_POSITION_GAINS,
-        force: bool = True,
-    ):
-        """
-        Sets the position gains
+        for mode in Actpack.subclasses_recursive(ActpackMode):
+            if hasattr(mode, "DRIVER_TYPE"):
+                if mode.DRIVER_TYPE == driver_type:
+                    self._modes[mode.NAME] = mode(self._driver)
+                    self._log.info(f"{mode.__name__} added to driver")
 
-        Args:
-            kp (int): The proportional gain
-            ki (int): The integral gain
-            kd (int): The derivative gain
-            force (bool): Force the mode transition. Defaults to False.
-        """
-        if self._mode != self._modes["position"]:
-            self._log.warning(f"Cannot set position gains in mode {self._mode}")
-            return
+    def subclasses_recursive(cls):
+        direct = cls.__subclasses__()
+        indirect = []
+        for subclass in direct:
+            indirect.extend(Actpack.subclasses_recursive(subclass))
+        return direct + indirect
 
-        self._mode._set_gains(gains)
+    def _start(self) -> None:
+        self._driver.start()
+        self.set_mode("idle")
 
-    def set_current_gains(
-        self,
-        gains: Gains = DEFAULT_CURRENT_GAINS,
-        force: bool = True,
-    ):
+    def _stop(self) -> None:
+        self._driver.stop()
 
-        """
-        Sets the current gains
+    def _update(self) -> None:
+        self._driver.update()
 
-        Args:
-            kp (int): The proportional gain
-            ki (int): The integral gain
-            ff (int): The feedforward gain
-            force (bool): Force the mode transition. Defaults to False.
-        """
-        if self._mode != self._modes["current"]:
-            self._log.warning(f"Cannot set current gains in mode {self._mode}")
-            return
 
-        self._mode._set_gains(gains)
-
-    def set_impedance_gains(
-        self,
-        gains: Gains = DEFAULT_IMPEDANCE_GAINS,
-        force: bool = True,
-    ):
-        """
-        Sets the impedance gains
-
-        Args:
-            gains (Gains): _description_
-            force (bool): Force the mode transition. Defaults to False.
-        """
-        if self._mode != self._modes["impedance"]:
-            self._log.warning(f"Cannot set impedance gains in mode {self._mode}")
-            return
-
-        self._mode._set_gains(gains)
-
-    def set_voltage(self, value: float, force: bool = False):
-        """
-        Sets the q axis voltage
-
-        Args:
-            value (float): The voltage to set
-            force (bool): Force the mode transition. Defaults to False.
-        """
-        if self._mode != self._modes["voltage"]:
-            self._log.warning(f"Cannot set voltage in mode {self._mode}")
-            return
-
-        self._mode._set_voltage(
-            int(self._units.convert_to_default_units(value, "voltage")),
-        )
-
-    def set_current(self, value: float, force: bool = False):
-        """
-        Sets the q axis current
-
-        Args:
-            value (float): The current to set
-            force (bool): Force the mode transition. Defaults to False.
-        """
-        if self._mode != self._modes["current"]:
-            self._log.warning(f"Cannot set current in mode {self._mode}")
-            return
-
-        self._mode._set_current(
-            int(self._units.convert_to_default_units(value, "current")),
-        )
-
-    def set_motor_torque(self, torque: float, force: bool = False):
-        """
-        Sets the motor torque
-
-        Args:
-            torque (float): The torque to set
-            force (bool): Force the mode transition. Defaults to False.
-        """
-        if self._mode != self._modes["current"]:
-            self._log.warning(f"Cannot set motor_torque in mode {self._mode}")
-            return
-
-        self._mode._set_current(
-            int(
-                self._units.convert_to_default_units(torque, "torque") / NM_PER_MILLIAMP
-            ),
-        )
-
-    def set_motor_position(self, position: float):
-        """
-        Sets the motor position
-
-        Args:
-            position (float): The position to set
-        """
-        if self._mode not in [self._modes["position"], self._modes["impedance"]]:
-            self._log.warning(f"Cannot set motor position in mode {self._mode}")
-            return
-
-        self._mode._set_motor_position(
-            int(
-                self._units.convert_to_default_units(position, "position")
-                / RAD_PER_COUNT
-            ),
-        )
-
-    # Read only properties from the actpack
-
-    @property
-    def units(self):
-        return self._units
-
-    @property
-    def frequency(self):
-        return self._frequency
-
-    @property
-    def mode(self):
-        return self._mode
-
-    @property
-    def motor_zero_position(self):
-        return self._motor_zero_position
-
-    @property
-    def joint_zero_position(self):
-        return self._joint_zero_position
-
-    @property
-    @abstractmethod
-    def battery_voltage(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def batter_current(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_voltage(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_current(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_torque(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_position(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_velocity(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_acceleration(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def motor_torque(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def joint_position(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def joint_velocity(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def genvars(self):
-        pass
-
-    @property
-    @abstractmethod
-    def acc_x(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def acc_y(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def acc_z(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def gyro_x(self):
-        pass
-
-    @property
-    @abstractmethod
-    def gyro_y(self):
-        pass
-
-    @property
-    @abstractmethod
-    def gyro_z(self):
-        pass
-
-
-class TMotorActpack(TMotorManager_mit_can, Actpack):
-    DEFAULT_IMPEDANCE_GAINS = Gains(K=2, B=0.1)
-    """
-    Default impedence gains for the TMotorActpack
-    
-    Attributes
-        K: The stiffness in Nm/rad
-        B: The damping in Nm/(rad/s)
-    """
-
-    DEFAULT_CURRENT_GAINS = Gains(kp=40, ki=400, ff=128)
-    """
-    Default current gains for the TMotorActpack
-    
-    Attributes
-        K: The stiffness in Nm/rad
-        B: The damping in Nm/(rad/s)
-    """
-
-    def __init__(
-        self,
-        motor_ID=None,
-        encoder: Encoder = None,
-        name: str = "Actpack",
-        units: UnitsDefinition = DEFAULT_UNITS,
-        logger: logging.Logger = None,
-        debug_level: int = 0,
-    ):
-        assert motor_ID
-        assert encoder
-        assert issubclass(type(encoder), Encoder)
-        self.encoder = encoder
-
-        TMotorManager_mit_can.__init__(self, motor_ID=motor_ID)
-        Actpack.__init__(
-            self, name=name, units=units, logger=logger, debug_level=debug_level
-        )
-
-        self._log.info(self.DEFAULT_IMPEDANCE_GAINS)
-
-        self._modes: dict[str, ActpackMode] = {
-            "impedance": TMotorImpedanceMode(self),
-            "position": TMotorPositionMode(self),
-        }
-
-    def __enter__(self):
-        """
-        Start the actpack and the joint encoder
-        """
-
-        # Overridden TMotor __enter__ to avoid incopatible logging module
-        self._log.info("Activate: " + self.device_info_string())
-        self.power_on()  # TODO: How to control this?
-        self._send_command()
-        self._entered = True
-        if not self.check_can_connection():
-            raise RuntimeError(
-                "Device not connected: " + str(self.device_info_string())
-            )
-
-        # Start the encoder
-        self.encoder.open()
-        self.set_mode("impedance")
-        return self
-
-    def __exit__(self, etype, value, tb):
-        """
-        Stop the actpack and the joint encoder
-        """
-        self._log.info("Deactivate: " + self.device_info_string())
-        self.power_off()  # TODO: How to control this
-
-        # Stop the encoder
-        self.encoder.close()
-
-        # if not (etype is None):
-        #     traceback.print_exception(etype, value, tb)
-
-    def start(self):
-        raise NotImplementedError()
-
-    def stop(self):
-        raise NotImplementedError()
-
-    def update(self):
-        Encoder.update(self.encoder)
-        TMotorManager_mit_can.update(self)
-
-    @property
-    def battery_voltage(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def batter_current(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def battery_voltage(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def batter_current(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def motor_voltage(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def motor_current(self) -> float:
-        return self.get_current_qaxis_amps()
-
-    @property
-    def motor_torque(self) -> float:
-        return self.get_output_torque_newton_meters()
-
-    @property
-    def motor_position(self) -> float:
-        return float(self.position)
-
-    @property
-    def motor_velocity(self) -> float:
-        return self.get_motor_velocity_radians_per_second()
-
-    @property
-    def motor_acceleration(self) -> float:
-        return self.get_motor_acceleration_radians_per_second_squared()
-
-    @property
-    def joint_position(self) -> float:
-        return self.encoder.encoder_position
-
-    @property
-    def joint_velocity(self) -> float:
-        return self.encoder.encoder_velocity
-
-    @property
-    def genvars(self):
-        raise NotImplementedError()
-
-    @property
-    def acc_x(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def acc_y(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def acc_z(self) -> float:
-        raise NotImplementedError()
-
-    @property
-    def gyro_x(self):
-        raise NotImplementedError()
-
-    @property
-    def gyro_y(self):
-        raise NotImplementedError()
-
-    @property
-    def gyro_z(self):
-        raise NotImplementedError()
-
-
-class ActpackMode:
-    def __init__(self, control_mode, device: Actpack) -> None:
+class ActpackMode(ABC):
+    def __init__(self, control_mode, driver) -> None:
         self._control_mode = control_mode
-        self._device = device
-        self._entry_callback: callable = lambda: None
-        self._exit_callback: callable = lambda: None
-
-        self._has_gains = False
+        self._driver = driver
 
     def __eq__(self, __o: object) -> bool:
         if isinstance(__o, ActpackMode):
@@ -538,148 +110,165 @@ class ActpackMode:
         return False
 
     def __str__(self) -> str:
-        return str(self._control_mode)
+        return f"Mode: {self.NAME} - {self._control_mode}"
 
     @property
     def mode(self):
         return self._control_mode
 
-    @property
-    def has_gains(self) -> bool:
-        return self._has_gains
-
     def enter(self):
-        self._entry_callback()
+        self._driver._log.info(f"[ENTER MODE] {self.NAME}")
+        self._enter()
 
     def exit(self):
-        self._exit_callback()
+        self._driver._log.info(f"[EXIT MODE] {self.NAME}")
+        self._exit()
 
     def transition(self, to_state: "ActpackMode"):
-        self.exit()
-        to_state.enter()
+        if self != to_state:
+            self.exit()
+            to_state.enter()
+        else:
+            raise ValueError(f"Transition from {self} -> {to_state}")
 
-
-class TMotorPositionMode(ActpackMode):
-    def __init__(self, device: TMotorActpack):
-        super().__init__(_TMotorManState.FULL_STATE, device)
-        self._device = device
-        self._entry_callback = self._entry
-        self._exit_callback = self._exit
-
-    def _entry(self):
-        self._device._log.info(f"[ENTER MODE] {__class__.__name__}")
-        if not self.has_gains:
-            self._set_gains()
-
-        self._set_motor_position(
-            int(
-                self._device._units.convert_to_default_units(
-                    self._device.motor_position, "position"
-                )
-            )
-        )
-
-    def _exit(self):
-        self._has_gains = False
-        self._device._log.info(f"[EXIT MODE] {__class__.__name__}")
+    @abstractmethod
+    def _enter(self):
         pass
 
-    def _set_motor_position(self, counts: int):
-        """Sets the motor position
-
-        Args:
-            counts (int): position in counts
-        """
-        self._device.position = counts * RAD_PER_COUNT
-
-    def _set_gains(self, gains: Gains = TMotorActpack.DEFAULT_IMPEDANCE_GAINS):
-        self._device.set_impedance_gains_real_unit_full_state_feedback(
-            K=gains.K, B=gains.B
-        )
-        self._has_gains = True
-
-
-class TMotorImpedanceMode(ActpackMode):
-    def __init__(self, device: TMotorActpack):
-        super().__init__(_TMotorManState.IMPEDANCE, device)
-        self._device = device
-        self._entry_callback = self._entry
-        self._exit_callback = self._exit
-
-    def _entry(self):
-        self._device._log.info(f"[ENTER MODE] {__class__.__name__}")
-        if not self.has_gains:
-            self._set_gains()
-
-        self._set_motor_position(
-            int(
-                self._device._units.convert_to_default_units(
-                    self._device.motor_position, "position"
-                )
-            )
-            / RAD_PER_COUNT
-        )
-
+    @abstractmethod
     def _exit(self):
-        self._has_gains = False
-        self._device._log.info(f"[EXIT MODE] {__class__.__name__}")
         pass
 
-    def _set_motor_position(self, counts: int):
-        """Sets the motor position
+
+class IdleMode(ActpackMode):
+    NAME = "idle"
+
+
+class ImpedenceMode(ActpackMode):
+    NAME = "impedence"
+
+
+class PositionMode(ActpackMode):
+    NAME = "position"
+
+
+@dataclass()
+class Gains:
+    """
+    Dataclass for controller gains
+
+    Attributes:
+        kp (int): Proportional gain
+        ki (int): Integral gain
+        kd (int): Derivative gain
+        K (int): Stiffness of the impedance controller
+        B (int): Damping of the impedance controller
+        ff (int): Feedforward gain
+    """
+
+    kp: int = 0
+    ki: int = 0
+    kd: int = 0
+    K: int = 0
+    B: int = 0
+    ff: int = 0
+
+    def __repr__(self) -> str:
+        return f"kp={self.kp}, ki={self.ki}, kd={self.kd}, K={self.K}, B={self.B}, ff={self.ff}"
+
+    def __ge__(self, other: "Gains") -> bool:
+        return all(
+            [
+                getattr(self, attr) >= getattr(other, attr)
+                for attr in Gains.__dataclass_fields__.keys()
+            ]
+        )
+
+
+class ModeGains:
+    """A class that contains the min, max and default gains for a given control mode"""
+
+    def __init__(
+        self, min: Gains = Gains(), max: Gains = Gains(), default: Gains = Gains()
+    ) -> None:
+        """Initialize the ModeGains class instance
 
         Args:
-            counts (int): position in counts
-        """
-        self._device.position * RAD_PER_COUNT
+            min (Gains): Lower bound of the gains allowed
+            max (Gains): Upper bound of the gains allowed
+            default (Gains): Default gains
 
-    def _set_gains(self, gains: Gains = TMotorActpack.DEFAULT_IMPEDANCE_GAINS):
-        self._device.set_impedance_gains_real_unit(K=gains.K, B=gains.B)
-        self._has_gains = True
+        Raises:
+            ValueError: If the default gains are not within the min and max gains
+        """
+        if not (min <= max):
+            raise ValueError("Min gains must be less than max gains")
+        if not (min <= default <= max):
+            raise ValueError("Default gains must be within the min and max gains")
+        self._min = min
+        self._max = max
+        self._default = default
+        self._gains = self._default
+
+    @property
+    def gains(self) -> Gains:
+        """The current gains for the control mode
+
+        Setter:
+        Raises:
+            ValueError: If the gains are not within the min and max gains
+        """
+        return self._gains
+
+    @gains.setter
+    def gains(self, gains: Gains):
+        if self._min <= gains <= self._max:
+            self._gains = gains
+        else:
+            raise ValueError(
+                f"Gains={gains} must be within the min={self._min} and max={self._max} gains"
+            )
+
+    def _gain_string(self, attr: str) -> str:
+        gain = getattr(self._gains, attr)
+        min_gain = getattr(self._min, attr)
+        max_gain = getattr(self._max, attr)
+        default_gain = getattr(self._default, attr)
+
+        if gain == min_gain == max_gain == default_gain == 0:
+            return f"{attr: >2} = 0 (Not used)"
+
+        return f"{attr: >2} = {gain: >3} [{min_gain},{max_gain}] default={default_gain}"
+
+    def __repr__(self) -> str:
+        return f"min={self._min}, max={self._max}, default={self._default}, gains={self._gains}"
+
+    def __str__(self) -> str:
+        str = ""
+        for (key, _) in Gains.__dataclass_fields__.items():
+            str += self._gain_string(key) + "\n"
+        return str[0:-1]
 
 
 if __name__ == "__main__":
-    DEG2RAD = 2 * np.pi / 360
-    enc = AS5048A_Encoder(bus="/dev/i2c-1")
+    # tmotor_actpack = Actpack(name="TMotorActpack1")
 
-    logging.basicConfig(
-        format="[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
-        datefmt="%I:%M:%S",
-        level=logging.INFO,
+    # with tmotor_actpack as actpack:
+    #     time.sleep(1)
+    #     actpack.update()
+
+    #     loop = SoftRealtimeLoop(dt=0.01, report=True, fade=0)
+
+    #     i = 0
+    #     toggle = True
+    #     for t in loop:
+    #         actpack.update()
+
+    mode_gains = ModeGains(
+        min=Gains(), max=Gains(kp=200, ki=300), default=Gains(kp=100, ki=200)
     )
-
-    tmotor_actpack = TMotorActpack(logger=logging.getLogger(), motor_ID=10, encoder=enc)
-
-    with tmotor_actpack as actpack:
-
-        actpack.set_zero_position()
-        time.sleep(1)
-        actpack.update()
-        enc_offset = actpack.encoder.encoder_position
-
-        loop = SoftRealtimeLoop(dt=0.01, report=True, fade=0)
-
-        actpack.set_impedance_gains(Gains(K=0.1, B=0.1))
-        i = 0
-        toggle = True
-        for t in loop:
-            actpack.update()
-            i += 1
-            if not (i % 100):
-                actpack._log.info(f"Motor position: {(actpack.position / 5):.3f}")
-                actpack._log.info(
-                    f"Encoder position: {((-1) * (actpack.encoder.encoder_position - enc_offset)):.3f}"
-                )
-            if not (i % 500):
-                if toggle:
-                    actpack.set_mode("position")
-                    actpack.velocity = 0
-                    actpack.position = -25 * DEG2RAD * 5
-                    toggle = not toggle
-                else:
-                    actpack.set_mode("position")
-                    actpack.velocity = 0
-                    actpack.position = 25 * DEG2RAD * 5
-                    toggle = not toggle
+    newgains = Gains(kp=200, ki=500)
+    mode_gains.gains = newgains
+    print(mode_gains)
 
     pass
