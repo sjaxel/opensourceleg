@@ -359,6 +359,6 @@ def twos_compliment(value: int, bit_length: int) -> int:
     assert bit_length >= 0
     assert value.bit_length() <= bit_length
     if value >= 2 ** (bit_length - 1):
-        return value - (2**bit_length)
+        return int(value - (2**bit_length))
     else:
-        return value
+        return int(value)

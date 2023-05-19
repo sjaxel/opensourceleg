@@ -7,9 +7,6 @@ from opensourceleg.utilities import twos_compliment
 
 
 class EncoderStateMock:
-    agc: int = 0
-    mag: int = 0
-
     def __init__(self) -> None:
         self._registers: bytearray = bytearray(256)
         self.open()
@@ -35,19 +32,19 @@ class EncoderStateMock:
     @property
     def zero_pos(self):
         reg = AS5048A_Encoder.OTP_ZERO_POSITION_HIGH
-        return AS5048A_Encoder._get14Bit(self._registers[reg : reg + 2])
+        return AS5048A_Encoder._get_14bit(self._registers[reg : reg + 2])
 
     @zero_pos.setter
     def zero_pos(self, value: int):
         reg = AS5048A_Encoder.OTP_ZERO_POSITION_HIGH
-        self._registers[reg : reg + 2] = AS5048A_Encoder._set14Bit(value)
+        self._registers[reg : reg + 2] = AS5048A_Encoder._set_14bit(value)
 
     @property
     def diag(self) -> bytes:
         return bytes([self._registers[AS5048A_Encoder.DIAGNOSTICS]])
 
     @diag.setter
-    def diag(self, kwargs):
+    def diag(self, kwargs: dict[int, bool]):
         reg = AS5048A_Encoder.DIAGNOSTICS
         regvalue = self._registers[reg]
         for (key, item) in kwargs.items():
@@ -59,12 +56,12 @@ class EncoderStateMock:
     @property
     def angle(self) -> bytes:
         reg = AS5048A_Encoder.ANGLE_HIGH
-        return AS5048A_Encoder._get14Bit(self._registers[reg : reg + 2])
+        return AS5048A_Encoder._get_14bit(self._registers[reg : reg + 2])
 
     @angle.setter
     def angle(self, value: int):
         reg = AS5048A_Encoder.ANGLE_HIGH
-        self._registers[reg : reg + 2] = AS5048A_Encoder._set14Bit(value)
+        self._registers[reg : reg + 2] = AS5048A_Encoder._set_14bit(value)
 
 
 @pytest.fixture()
@@ -79,38 +76,13 @@ def patch_encoder(mocker, encoder_mock: EncoderStateMock):
 
 
 @pytest.fixture
-def enc_patched(patch_encoder):
+def enc_patched(patch_encoder) -> AS5048A_Encoder:
     obj = AS5048A_Encoder(bus="/dev/null", debug_level=10)
     return obj
 
 
-# def test_encoder_mock_object(encoder_mock: EncoderStateMock):
-#     encoder_mock.angle = 0
-#     assert encoder_mock.angle == 0
-#     encoder_mock.angle = 10
-#     assert encoder_mock.angle == 10
-
-
-# def test_encoder_mock_diag(encoder_mock: EncoderStateMock):
-#     assert encoder_mock.diag == b'\x00'
-#     encoder_mock.diag = {
-#                         AS5048A_Encoder.FLAG_COMP_H: True,
-#                         AS5048A_Encoder.FLAG_COMP_L: True,
-#                         AS5048A_Encoder.FLAG_COF: True,
-#                         AS5048A_Encoder.FLAG_OCF: True
-#     }
-#     assert encoder_mock.diag == b'\x0F'
-#     encoder_mock.diag = {
-#                         AS5048A_Encoder.FLAG_COF: True,
-#                         AS5048A_Encoder.FLAG_OCF: False
-#     }
-#     assert encoder_mock.diag == b'\x0E'
-#     encoder_mock.diag = {}
-#     assert encoder_mock.diag == b'\x0E'
-
-
 def test_mock2(enc_patched: AS5048A_Encoder, encoder_mock: EncoderStateMock):
-    enc_patched.open()
+    enc_patched.start()
     assert enc_patched.encoder_position == 0
     encoder_mock.angle = 2**14 - 1
     enc_patched.update()
@@ -120,13 +92,34 @@ def test_mock2(enc_patched: AS5048A_Encoder, encoder_mock: EncoderStateMock):
 
 @pytest.fixture
 def enc_obj_open(enc_patched: AS5048A_Encoder):
-    enc_patched.open()
+    enc_patched.start()
     return enc_patched
 
 
 def test_AS5048A_Encoder(enc_obj_open: AS5048A_Encoder):
     assert type(enc_obj_open) == AS5048A_Encoder
-    assert enc_obj_open._isOpen == True
+    assert enc_obj_open._running == True
+
+
+def test_encoder_diag(enc_obj_open: AS5048A_Encoder, encoder_mock: EncoderStateMock):
+    assert enc_obj_open.diag_OCF == True
+    assert enc_obj_open.diag_COF == False
+    assert enc_obj_open.diag_compH == False
+    assert enc_obj_open.diag_compL == False
+
+    # Test that a false OCF flag raises an error when updating
+    with pytest.raises(OSError):
+        encoder_mock.diag = {AS5048A_Encoder.FLAG_OCF: False}
+        enc_obj_open.update()
+
+    # Test that changing the other registers doesn't change the OCF flag
+    with pytest.raises(OSError):
+        encoder_mock.diag = {
+            AS5048A_Encoder.FLAG_COMP_H: True,
+            AS5048A_Encoder.FLAG_COMP_L: True,
+            AS5048A_Encoder.FLAG_COF: True,
+        }
+        enc_obj_open.update()
 
 
 @pytest.mark.parametrize(
@@ -191,14 +184,27 @@ def test_encoder_velocity_full_scale(
     enc_obj_open.update()
     encoder_mock.angle = AS5048A_Encoder.ENC_RESOLUTION - 1
     enc_obj_open.update()
-    enc_obj_open._encData_old_timestamp = 0
-    enc_obj_open._encData_new_timestamp = 10**9  # 1s in ns
+    enc_obj_open._encdata_old_timestamp = 0
+    enc_obj_open._encdata_new_timestamp = 10**9  # 1s in ns
 
     expected = 2 * pi - (1 / 10**14)
     assert enc_obj_open.encoder_velocity == pytest.approx(
         expected,
         rel=AS5048A_Encoder.ENC_RESOLUTION,
     )
+
+
+def test_encoder_zero_pos(
+    encoder_mock: EncoderStateMock, enc_obj_open: AS5048A_Encoder
+):
+    assert enc_obj_open.zero_position == 0
+    encoder_mock.zero_pos = 100
+    enc_obj_open.update()
+    assert enc_obj_open.zero_position == 100
+
+    enc_obj_open.zero_position = 200
+    assert enc_obj_open.zero_position == 200
+    assert encoder_mock.zero_pos == 200
 
 
 @pytest.mark.parametrize(
@@ -213,8 +219,8 @@ def test_encoder_velocity_full_scale(
         (100, False, 0b1000001),
     ],
 )
-def test_calculateI2CAdress(a1, a2, expected):
-    assert AS5048A_Encoder._calculateI2CAdress(a1, a2) == expected
+def test_calculate_I2C_adress(a1, a2, expected):
+    assert AS5048A_Encoder._calculate_I2C_adress(a1, a2) == expected
     assert AS5048A_Encoder(A1_adr_pin=a1, A2_adr_pin=a2).addr == expected
 
 
@@ -228,7 +234,7 @@ def test_calculateI2CAdress(a1, a2, expected):
     ],
 )
 def test_get14Bit(byteobject: bytes, value: int):
-    assert value == AS5048A_Encoder._get14Bit(byteobject)
+    assert value == AS5048A_Encoder._get_14bit(byteobject)
     ##assert byteobject == AS5048A_Encoder._set14Bit(value)
     ##assert AS5048A_Encoder._get14Bit(byteobject) == AS5048A_Encoder._set14Bit(value)
 
@@ -245,9 +251,9 @@ def test_get14Bit(byteobject: bytes, value: int):
 def test_set14Bit(byteobject: bytes, value: int, raises):
     if raises:
         with pytest.raises(raises):
-            assert byteobject == AS5048A_Encoder._set14Bit(value)
-            assert value == AS5048A_Encoder._get14Bit(byteobject)
+            assert byteobject == AS5048A_Encoder._set_14bit(value)
+            assert value == AS5048A_Encoder._get_14bit(byteobject)
     else:
-        assert byteobject == AS5048A_Encoder._set14Bit(value)
-        assert value == AS5048A_Encoder._get14Bit(byteobject)
-        assert value == AS5048A_Encoder._get14Bit(AS5048A_Encoder._set14Bit(value))
+        assert byteobject == AS5048A_Encoder._set_14bit(value)
+        assert value == AS5048A_Encoder._get_14bit(byteobject)
+        assert value == AS5048A_Encoder._get_14bit(AS5048A_Encoder._set_14bit(value))
