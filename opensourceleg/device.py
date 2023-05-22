@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from logging import Logger
 
-from opensourceleg.hardware import DEFAULT_UNITS, UnitsDefinition
 from opensourceleg.log import OSLDeviceLogger
+from opensourceleg.units import DEFAULT_UNITS, UnitsDefinition
 
 
 class OSLDevice(ABC, OSLDeviceLogger):

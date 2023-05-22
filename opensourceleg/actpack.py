@@ -9,18 +9,6 @@ from TMotorCANControl.mit_can import TMotorManager_mit_can, _TMotorManState
 
 from opensourceleg.device import DeviceDriver, OSLDevice
 from opensourceleg.encoder import AS5048A_Encoder, Encoder
-from opensourceleg.hardware import (
-    CONTROL_MODE,
-    DEFAULT_CURRENT_GAINS,
-    DEFAULT_IMPEDANCE_GAINS,
-    DEFAULT_POSITION_GAINS,
-    DEFAULT_UNITS,
-    NM_PER_AMP,
-    NM_PER_MILLIAMP,
-    RAD_PER_COUNT,
-    RAD_PER_DEG,
-    UnitsDefinition,
-)
 
 
 class Actpack(OSLDevice):

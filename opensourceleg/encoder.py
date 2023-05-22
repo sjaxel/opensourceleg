@@ -6,14 +6,12 @@ import numpy as np
 from smbus2 import I2cFunc, SMBus
 
 from opensourceleg.device import OSLDevice
-from opensourceleg.hardware import DEFAULT_UNITS, UnitsDefinition
 from opensourceleg.utilities import twos_compliment
 
 
 class Encoder(OSLDevice):
-    def __init__(self, encoder_res: int, **kwargs) -> None:
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.max_encoder_counts = encoder_res  # 14 bit encoder, so 14 bits!
 
     @property
     @abstractmethod
@@ -143,9 +141,7 @@ class AS5048A_Encoder(Encoder):
         name: str = "AS5048A_Encoder",
         **kwargs,
     ) -> None:
-        super().__init__(
-            encoder_res=AS5048A_Encoder.ENC_RESOLUTION, name=name, **kwargs
-        )
+        super().__init__(name=name, **kwargs)
         self.bus = bus
         self.addr = AS5048A_Encoder._calculate_I2C_adress(A1_adr_pin, A2_adr_pin)
         self._reset_data()
@@ -258,7 +254,7 @@ class AS5048A_Encoder(Encoder):
             return (
                 (encAngleDataNew - encAngleDataOld)
                 * (2 * np.pi)
-                / self.max_encoder_counts
+                / AS5048A_Encoder.ENC_RESOLUTION
                 / (timediff)
             )
 

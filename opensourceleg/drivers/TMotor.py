@@ -1,6 +1,5 @@
-from actpack import IdleMode, ImpedenceMode, PositionMode
+from actpack import Gains, IdleMode, ImpedenceMode, PositionMode
 from device import DeviceDriver
-from hardware import Gains
 from TMotorCANControl.mit_can import TMotorManager_mit_can, _TMotorManState
 
 
