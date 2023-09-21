@@ -69,6 +69,10 @@ ALL_UNITS = {
         "m/s^2": 1.0,
         "g": 9.80665,
     },
+    "rotation": {
+        "CW": 1.0,
+        "CCW": -1.0,
+    },
 }
 
 
@@ -138,5 +142,6 @@ DEFAULT_UNITS = UnitsDefinition(
         "current": "mA",
         "voltage": "mV",
         "gravity": "m/s^2",
+        "rotation": "CW",
     }
 )

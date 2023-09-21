@@ -83,7 +83,7 @@ def enc_patched(patch_encoder) -> AS5048A_Encoder:
 
 def test_mock2(enc_patched: AS5048A_Encoder, encoder_mock: EncoderStateMock):
     enc_patched.start()
-    assert enc_patched.encoder_position == 0
+    assert enc_patched.position == 0
     encoder_mock.angle = 2**14 - 1
     enc_patched.update()
     assert enc_patched.encoder_output == 2**14 - 1
@@ -144,7 +144,7 @@ def test_update_pos(
     encoder_mock.angle = int(data)
     enc_obj_open.update()
 
-    assert enc_obj_open.encoder_position == pytest.approx(
+    assert enc_obj_open.position == pytest.approx(
         exp_pos,
         rel=1 / AS5048A_Encoder.ENC_RESOLUTION,
     )
@@ -157,7 +157,7 @@ def test_encoder_velocity_zero(
     enc_obj_open.update()
     encoder_mock.angle = 100
     enc_obj_open.update()
-    assert enc_obj_open.encoder_velocity == 0
+    assert enc_obj_open.velocity == 0
 
 
 def test_encoder_velocity_sign(
@@ -168,10 +168,10 @@ def test_encoder_velocity_sign(
     enc_obj_open.update()
     encoder_mock.angle = 1
     enc_obj_open.update()
-    pos = enc_obj_open.encoder_velocity
+    pos = enc_obj_open.velocity
     encoder_mock.angle = 0
     enc_obj_open.update()
-    neg = enc_obj_open.encoder_velocity
+    neg = enc_obj_open.velocity
     assert pos > 0
     assert neg < 0
 
@@ -188,7 +188,7 @@ def test_encoder_velocity_full_scale(
     enc_obj_open._encdata_new_timestamp = 10**9  # 1s in ns
 
     expected = 2 * pi - (1 / 10**14)
-    assert enc_obj_open.encoder_velocity == pytest.approx(
+    assert enc_obj_open.velocity == pytest.approx(
         expected,
         rel=AS5048A_Encoder.ENC_RESOLUTION,
     )

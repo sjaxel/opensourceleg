@@ -1,21 +1,26 @@
-import logging
 import time
-from abc import ABC, abstractmethod
 
 import numpy as np
 from smbus2 import I2cFunc, SMBus
 
-from opensourceleg.device import OSLDevice
-from opensourceleg.utilities import twos_compliment
+from opensourceleg.device import (
+    DEFAULT_UNITS,
+    Interface,
+    OSLDevice,
+    Units,
+    UnitsDefinition,
+    abstractmethod,
+)
+from opensourceleg.utilities import from_twos_compliment, to_twos_compliment
 
 
-class Encoder(OSLDevice):
+class Encoder(Interface):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
     @property
     @abstractmethod
-    def encoder_position(self) -> float:
+    def position(self) -> float:
         """Get the encoder position in rad [-π, π] around the zero position
 
         Returns:
@@ -26,16 +31,11 @@ class Encoder(OSLDevice):
     @property
     @abstractmethod
     def encoder_output(self) -> int:
-        """Get the raw encoder output as counts of full scale output.
-
-        Returns:
-            int: Encoder output in counts [0, FS]
-        """
         pass
 
     @property
     @abstractmethod
-    def encoder_velocity(self) -> float:
+    def velocity(self) -> float:
         """
         The encoder position in rad as offset from the programmed zero position
 
@@ -56,7 +56,7 @@ class Encoder(OSLDevice):
 
     @zero_position.setter
     @abstractmethod
-    def zero_position(self, value: int):
+    def zero_position(self, value: float):
         """
         Set the zero position of the encoder
 
@@ -64,8 +64,15 @@ class Encoder(OSLDevice):
             value (int): The zero position encoder offset
         """
 
+    @abstractmethod
+    def set_zero(self):
+        """
+        Set the current position as the zero position
+        """
+        pass
 
-class AS5048A_Encoder(Encoder):
+
+class AS5048A_Encoder(OSLDevice, Encoder):
     """Class for the AS5048A encoder, implements the Encoder interface
 
     https://www.mouser.com/datasheet/2/588/AS5048_DS000298_4_00-2324531.pdf
@@ -139,17 +146,24 @@ class AS5048A_Encoder(Encoder):
         A1_adr_pin: bool = False,
         A2_adr_pin: bool = False,
         name: str = "AS5048A_Encoder",
+        zero_position: int = 0,
         **kwargs,
     ) -> None:
         super().__init__(name=name, **kwargs)
         self.bus = bus
+        self._units["rotation"] = "CCW"
         self.addr = AS5048A_Encoder._calculate_I2C_adress(A1_adr_pin, A2_adr_pin)
         self._reset_data()
+
+        self._zero_to_set = zero_position
 
     def _start(self) -> None:
         self._log.info(f"Open encoder communication {self.__class__.__name__}")
         self._SMBus = SMBus(self.bus)
         self._update()
+        if self.zero_position != self._zero_to_set:
+            self.zero_position = self._zero_to_set
+            self._log.info(f"Set zero position to {self.zero_position}")
 
     def _stop(self) -> None:
         if hasattr(self, "_SMBus"):
@@ -230,22 +244,30 @@ class AS5048A_Encoder(Encoder):
             self._log.warning("High magnetic field comp triggered")
 
     @property
-    def encoder_position(self) -> float:
-        signed_output = twos_compliment(self.encoder_output, 14)
+    @Units.to_defaults("position")
+    @Units.to_defaults("rotation")
+    def position(self) -> float:
+        signed_output = from_twos_compliment(self.encoder_output, 14)
         return (signed_output * 2 * np.pi) / AS5048A_Encoder.ENC_RESOLUTION
 
     @property
     def encoder_output(self) -> int:
+        """Get the raw encoder output as counts of full scale output.
+
+        Returns:
+            int: Encoder output in counts [0, FS]
+        """
         return AS5048A_Encoder._get_14bit(self._encdata_new[4:6])
 
     @property
-    def encoder_velocity(self) -> float:
+    @Units.to_defaults("acceleration")
+    def velocity(self) -> float:
         try:
             encAngleDataOld = AS5048A_Encoder._get_14bit(self._encdata_old[4:6])
             encAngleDataNew = AS5048A_Encoder._get_14bit(self._encdata_new[4:6])
             # Timediff is converted from ns to s (x10^-9)
             timediff = (
-                self._encdata_new_timestamp - self._encdata_old_timestamp
+                (self._encdata_new_timestamp - self._encdata_old_timestamp) + 1
             ) * 10**-9
         except TypeError:
             ## Typeerror indicate we only took one sample and have 0 velocity.
@@ -273,12 +295,14 @@ class AS5048A_Encoder(Encoder):
         """Sets the zero position OTP registers (but does not burn them)
 
         Args:
-            value (int): The zero position encoder offset
+            value (int): The content of the Zero offset registers
 
         Raises:
             OverflowError: If value >= 2^14
         """
-        self._log.info(f"[SET] Zero position OTP: {value}")
+        assert (
+            0 < value < (AS5048A_Encoder.ENC_RESOLUTION - 1)
+        ), "Zero position must be between 0 and 16383"
         try:
             payload = AS5048A_Encoder._set_14bit(value)
         except OverflowError:
@@ -287,6 +311,24 @@ class AS5048A_Encoder(Encoder):
             )
         else:
             self._write_registers(AS5048A_Encoder.OTP_ZERO_POSITION_HIGH, payload)
+
+    def set_zero(self) -> None:
+        """
+        Calculates the midpoint between the current endpoints and sets it as
+        the zero position.
+        """
+        input("Set joint in lower position and press enter")
+
+        self.zero_position = 0
+        self._update()
+        min = from_twos_compliment(self.encoder_output, 14)
+
+        input("Set joint in upper position and press enter")
+        self._update()
+        max = from_twos_compliment(self.encoder_output, 14)
+        mid = (min + max) // 2
+        self.zero_position = to_twos_compliment(mid, 14)
+        self._log.info(f"[SET] Zero registers: {self.zero_position}")
 
     @property
     def diag_compH(self) -> bool:
@@ -336,28 +378,35 @@ class AS5048A_Encoder(Encoder):
         return bool(self._encdata_new[1] & AS5048A_Encoder.FLAG_OCF)
 
     def __repr__(self) -> str:
-        ang = self.encoder_position
-        vel = self.encoder_velocity
+        ang = self.position
+        vel = self.velocity
         str = f"\n\tAngle: {ang:.3f} rad\n\tVelocity: {vel:.3f} rad/s"
         return str
 
 
 if __name__ == "__main__":
 
-    enc = AS5048A_Encoder(bus="/dev/i2c-1")
+    custom_units = UnitsDefinition()
+    custom_units.update(DEFAULT_UNITS)
+    custom_units["position"] = "deg"
+
+    enc = AS5048A_Encoder(basepath="/devices/", bus="/dev/i2c-1", units=custom_units)
+
+    print(enc._units)
+
     with enc:
-        enc.zero_position_OTP = 0
+        enc.zero_position = 0
         enc.update()
-        enc._log.info(f"Zero registers: {enc.zero_position_OTP}")
+        enc._log.info(f"Zero registers: {enc.zero_position}")
         enc._log.info(f"Enc output: {enc.encoder_output}")
-        enc.zero_position_OTP = enc.encoder_output
-        enc._log.info(f"Zero registers: {enc.zero_position_OTP}")
+        enc.zero_position = enc.encoder_output
+        enc._log.info(f"Zero registers: {enc.zero_position}")
         enc._log.info(f"Enc output: {enc.encoder_output}")
         enc.update()
-        enc._log.info(f"Zero registers: {enc.zero_position_OTP}")
+        enc._log.info(f"Zero registers: {enc.zero_position}")
         enc._log.info(f"Enc output: {enc.encoder_output}")
 
         while True:
             enc.update()
-            enc._log.info(f"Position: {enc.encoder_position:.3f}")
+            enc._log.info(f"Position: {enc.position:.3f}")
             time.sleep(2)

@@ -2,7 +2,7 @@ import pytest
 import pytest_mock
 
 from opensourceleg.actpack import Actpack, ActpackMode, Gains, ModeGains
-from opensourceleg.device import DeviceDriver
+from opensourceleg.device_old import DeviceDriver
 
 
 @pytest.fixture

@@ -343,15 +343,17 @@ def get_active_ports():
     return serial_ports
 
 
-def twos_compliment(value: int, bit_length: int) -> int:
-    """_summary_
+def from_twos_compliment(value: int, bit_length: int) -> int:
+    """Converts a 2's compliment integer to a signed integer
 
     Args:
-        value (int): The unsigned value to take 2's compliment from.
-        bit_length (int): _description_
+        value (int): 2's compliment integer
+        bit_length (int): Number of bits of 2's compliment representation
 
     Returns:
-        int: 2's compliment of the value given
+        int: Signed integer
+
+
     """
     assert type(value) == int
     assert value >= 0
@@ -362,3 +364,52 @@ def twos_compliment(value: int, bit_length: int) -> int:
         return int(value - (2**bit_length))
     else:
         return int(value)
+
+
+def to_twos_compliment(value: int, bit_length: int) -> int:
+    """Converts a signed integer to 2's compliment for of a defined number of bits
+    as an unsigned integer
+
+    Args:
+        value (int): Signed integer to convert
+        bits (int): Number of bits of 2's compliment representation
+
+    Returns:
+        int: Unsigned integer 2's compliment
+    """
+    assert value >= -(
+        2 ** (bit_length - 1)
+    ), f"Value {value} is too small for {bit_length} bits"
+    assert value < 2 ** (
+        bit_length - 1
+    ), f"Value {value} is too large for {bit_length} bits"
+    if value >= 0:
+        return value
+    return value + 2**bit_length
+
+
+def value_to_bit_count(
+    value: float, bit_length: int, min_value: float, max_value: float
+):
+    """_summary_
+
+    Args:
+        value (float): _description_
+        bit_length (_type_): _description_
+        min_value (_type_): _description_
+        max_value (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    assert type(bit_length) == int
+    assert bit_length > 0
+    assert min_value < max_value
+    assert min_value <= value <= max_value
+
+    if value < 0:
+        new_value = (max_value - min_value) + value
+    else:
+        new_value = value
+
+    return int(new_value / (max_value - min_value) * (2**bit_length - 1))
