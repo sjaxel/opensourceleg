@@ -1,11 +1,9 @@
 from typing import TypeVar
 
-import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-
-import numpy as np
+from logging import Logger
 
 from opensourceleg.device import Interface, OSLDevice, Units
 
@@ -318,7 +316,7 @@ class Actpack(OSLDevice, Actuator):
         try:
             return self.mode.gains
         except AttributeError:
-            raise NotImplementedError(f"{self.mode} does not support reading velocity")
+            raise RuntimeError(f"{self.mode} does not support reading velocity")
 
     @gains.setter
     def gains(self, gains: Gains) -> None:
@@ -326,7 +324,7 @@ class Actpack(OSLDevice, Actuator):
             self.mode.gains = gains
             self._log.debug(f"Set gains to {gains}")
         except AttributeError:
-            raise NotImplementedError(f"{self.mode} does not support setting gains")
+            raise RuntimeError(f"{self.mode} does not support setting gains")
 
     @property
     @Units.to_defaults("position")
@@ -339,7 +337,7 @@ class Actpack(OSLDevice, Actuator):
             self.mode.position = position
             self._log.debug(f"Set position to {position:.3f} rad")
         except AttributeError:
-            raise NotImplementedError(f"{self.mode} does not support setting position")
+            raise RuntimeError(f"{self.mode} does not support setting position")
 
     @property
     def velocity(self) -> float:
@@ -354,14 +352,14 @@ class Actpack(OSLDevice, Actuator):
             self.mode.velocity = velocity
             self._log.debug(f"Set velocity to {velocity:.3f} rad/s")
         except AttributeError:
-            raise NotImplementedError(f"{self.mode} does not support velocity control")
+            raise RuntimeError(f"{self.mode} does not support velocity control")
 
     @property
     def torque(self) -> float:
         try:
             return self.mode.torque
         except AttributeError:
-            raise NotImplementedError(f"{self.mode} does not support reading torque")
+            raise RuntimeError(f"{self.mode} does not support reading torque")
 
     @torque.setter
     def torque(self, torque: float) -> None:
@@ -369,7 +367,7 @@ class Actpack(OSLDevice, Actuator):
             self.mode.torque = torque
             self._log.info(f"Set torque to {torque} Nm")
         except AttributeError:
-            raise NotImplementedError(f"{self.mode} does not support torque control")
+            raise RuntimeError(f"{self.mode} does not support torque control")
 
 
 if __name__ == "__main__":

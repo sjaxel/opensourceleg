@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from dataclasses import dataclass
 from math import isclose
 from time import sleep
 
@@ -9,9 +10,10 @@ from opensourceleg.actpack import (
     Gains,
     IdleMode,
     ImpedenceMode,
+    OSLDevice,
     SpeedMode,
+    Units,
 )
-from opensourceleg.device import DeviceInterface, OSLDevice, Units
 from opensourceleg.encoder import Encoder
 
 
@@ -47,8 +49,23 @@ class Transmission:
 
 
 class Joint(Actuator):
+    """Device class for joints
+
+    Can be subclassed to support different joint types and versions
+    """
+
+    GEAR_RATIO: tuple[int, int]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
+
+    @property
+    def impedance(self) -> Gains:
+        pass
+
+    @impedance.setter
+    def impedance(self, gains: Gains) -> None:
+        pass
 
     @abstractmethod
     def home(self):
@@ -56,10 +73,12 @@ class Joint(Actuator):
 
 
 class OSLv2Joint(OSLDevice, Joint):
+    GEAR_RATIO = (18, 83)
+
     def __init__(
         self,
         name: str = "joint",
-        gear_ratio: tuple[int, int] = (1, 5),
+        gear_ratio: tuple[int, int] = GEAR_RATIO,
         homing_speed: float = 0.1,
         home: bool = True,
         **kwargs,
@@ -231,3 +250,34 @@ class OSLv2Joint(OSLDevice, Joint):
 
         """
         self.devmgr(Actuator, "./actpack").torque = torque / self._transmission.set(1)
+
+
+@dataclass
+class JointState:
+
+    joint: Joint
+    mode: ActpackMode
+    angle: float = None
+    K: float = None
+    B: float = None
+    velocity: float = None
+    torque: float = None
+
+    def set(self):
+        assert self.mode and self.joint, "Joint and mode must be set"
+        if self.mode:
+            self.joint.mode = self.mode
+        if self.K and self.B:
+            self.joint.gains = Gains(K=self.K, B=self.B)
+        if self.B:
+            self.joint.B = self.B
+        if self.angle:
+            self.joint.position = self.angle
+        if self.velocity:
+            self.joint.velocity = self.velocity
+        if self.torque:
+            self.joint.torque = self.torque
+
+
+if __name__ == "__main__":
+    print("Module not executable")

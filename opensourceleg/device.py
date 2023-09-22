@@ -1,19 +1,15 @@
 from types import TracebackType
 from typing import Any, Final, TypeVar, Union
 
-import time
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
 from functools import wraps
 from logging import Logger
 from pathlib import PurePosixPath
 
-import numpy as np
-from log import OSLDeviceLogger, getLogger
-from smbus2 import SMBus
+from log import getLogger
 
 from opensourceleg.units import DEFAULT_UNITS, UnitsDefinition
-from opensourceleg.utilities import to_twos_compliment
 
 
 class DevicePath(PurePosixPath):
@@ -66,6 +62,7 @@ class DeviceManager:
 
     _device_tree: dict[DevicePath, "OSLDevice"] = {}
     ROOT = DevicePath("/")
+    _log: Logger = None
     _exitStack: ExitStack = None
     _lock = False
 
@@ -82,9 +79,15 @@ class DeviceManager:
             raise RuntimeError("Device tree is locked and cannot be modified")
         super().__init__(**kwargs)
         self._cwd: DevicePath = DevicePath(path)
+
+        ## Initialise the root device manager object.
+        if self._cwd == DeviceManager.ROOT:
+            self._log = getLogger("/")
+            self._log.info("Device manager initialised")
+
         if device:
             DeviceManager._device_tree[device.path] = device
-            print(f"Added {device} to device tree")
+            device._log.info(f"Added {device} to device tree")
 
     def __enter__(self):
         """Enter a context manager that locks the device tree and enters all subdevices
@@ -276,10 +279,14 @@ class OSLDevice(ABC):
         self._implemented_interfaces: list[DeviceInterface] = []
         for baseclass in self.__class__.__bases__:
             if issubclass(baseclass, Interface):
-                print(f"Adding {baseclass} to implemented interfaces")
+                self._log.info(
+                    f"Adding Interface {baseclass.__name__} to implemented interfaces"
+                )
                 self._implemented_interfaces.append(baseclass)
             else:
-                print(f"Skipping {baseclass} because it is not a subclass of Interface")
+                self._log.info(
+                    f"Skipping {baseclass} because it is not a subclass of Interface"
+                )
 
     def start(self) -> None:
         self._log.info(f"START")
