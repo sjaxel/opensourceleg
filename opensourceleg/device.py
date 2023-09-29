@@ -9,7 +9,9 @@ from pathlib import PurePosixPath
 
 from log import getLogger
 
+from opensourceleg.timer import OSLTimer
 from opensourceleg.units import DEFAULT_UNITS, UnitsDefinition
+from opensourceleg.utilities import SoftRealtimeLoop
 
 
 class DevicePath(PurePosixPath):
@@ -60,6 +62,7 @@ class DeviceManager:
 
     """
 
+    _clock: SoftRealtimeLoop
     _device_tree: dict[DevicePath, "OSLDevice"] = {}
     ROOT = DevicePath("/")
     _log: Logger = None
@@ -67,7 +70,11 @@ class DeviceManager:
     _lock = False
 
     def __init__(
-        self, path: Union[DevicePath, str] = ROOT, device: "OSLDevice" = None, **kwargs
+        self,
+        path: Union[DevicePath, str] = ROOT,
+        device: "OSLDevice" = None,
+        frequency: int = 100,
+        **kwargs,
     ) -> None:
         """Initialise a device manager instance
 
@@ -84,6 +91,7 @@ class DeviceManager:
         if self._cwd == DeviceManager.ROOT:
             self._log = getLogger("/")
             self._log.info("Device manager initialised")
+            DeviceManager._clock = SoftRealtimeLoop(dt=(1 / frequency))
 
         if device:
             DeviceManager._device_tree[device.path] = device
@@ -168,6 +176,10 @@ class DeviceManager:
     @property
     def cwd(self) -> DevicePath:
         return self._cwd
+
+    @property
+    def clock(self) -> SoftRealtimeLoop:
+        return DeviceManager._clock
 
     def get(self, path: Union[DevicePath, str]) -> "OSLDevice":
         devicepath = self._cwd / path
@@ -260,6 +272,7 @@ class OSLDevice(ABC):
         self._units: UnitsDefinition = units
         self.devmgr = DeviceManager(path=self.path, device=self)
         self._init_interfaces()
+        self._timer: OSLTimer = OSLTimer(self._name, logger=None)
 
     def __enter__(self):
         self.start()
@@ -295,9 +308,11 @@ class OSLDevice(ABC):
     def stop(self) -> None:
         self._log.info(f"STOP")
         self._stop()
+        self._log.info(f"Timer stats: {self._timer}")
 
     def update(self) -> None:
-        self._update()
+        with self._timer:
+            self._update()
 
     @abstractmethod
     def _start(self) -> None:
