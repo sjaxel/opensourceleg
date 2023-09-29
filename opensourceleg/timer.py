@@ -59,6 +59,9 @@ class OSLTimer:
 
     def __str__(self) -> str:
         stats = self.timers[self.name]
+        n = stats["count"]
+        if n == 0:
+            return f"Timer {self.name}: No data"
         return f"Timer {self.name}: avg={(stats['time'] / stats['count']):.4f}s, max {stats['max']:.4f}s"
 
 

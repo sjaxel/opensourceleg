@@ -110,7 +110,7 @@ class SoftRealtimeLoop:
         self.sum_err = 0.0
         self.sum_var = 0.0
         self.sleep_t_agg = 0.0
-        self.n = 0
+        self.n: int = 0
         self.report = report
 
     def __del__(self):
@@ -161,7 +161,7 @@ class SoftRealtimeLoop:
         self.t0 = self.t1 = time.time() + self.dt
         return self
 
-    def __next__(self):
+    def __next__(self) -> tuple[int, float]:
         if self.killer.kill_now:
             raise StopIteration
 
@@ -190,13 +190,13 @@ class SoftRealtimeLoop:
             # inits ttarg on first call
             self.ttarg = time.time() + self.dt
             # then skips the first loop
-            return self.t1 - self.t0
+            return (int(self.n), (self.t1 - self.t0))
         error = time.time() - self.ttarg  # seconds
         self.sum_err += error
         self.sum_var += error**2
         self.n += 1
         self.ttarg += self.dt
-        return self.t1 - self.t0
+        return (int(self.n), (self.t1 - self.t0))
 
 
 class CSVLog:

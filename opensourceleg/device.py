@@ -62,19 +62,16 @@ class DeviceManager:
 
     """
 
-    _clock: SoftRealtimeLoop
+    _clock: SoftRealtimeLoop = SoftRealtimeLoop()
     _device_tree: dict[DevicePath, "OSLDevice"] = {}
     ROOT = DevicePath("/")
     _log: Logger = None
     _exitStack: ExitStack = None
     _lock = False
+    _timer = OSLTimer("DeviceManager(Update)", logger=None)
 
     def __init__(
-        self,
-        path: Union[DevicePath, str] = ROOT,
-        device: "OSLDevice" = None,
-        frequency: int = 100,
-        **kwargs,
+        self, path: Union[DevicePath, str] = ROOT, device: "OSLDevice" = None, **kwargs
     ) -> None:
         """Initialise a device manager instance
 
@@ -89,11 +86,29 @@ class DeviceManager:
 
         ## Initialise the root device manager object.
         if self._cwd == DeviceManager.ROOT:
-            self._log = getLogger("/")
-            self._log.info("Device manager initialised")
-            DeviceManager._clock = SoftRealtimeLoop(dt=(1 / frequency))
+            if device:
+                raise ValueError("Device cannot be specified for root device manager")
 
-        if device:
+            ## Init logger for the device manager root object
+            DeviceManager._log = getLogger("/")
+            DeviceManager._log.info("Device manager initialised")
+
+        ## Check that the parent path exists in the tree
+        elif (
+            self._cwd.parent not in DeviceManager._device_tree
+            and self._cwd.parent != DeviceManager.ROOT
+        ):
+            raise KeyError(f"Parent device {self._cwd.parent} not found in device tree")
+        ## Check that a device does not already exist in the path
+        elif self._cwd in DeviceManager._device_tree:
+            raise KeyError(f"Device {self._cwd} already exists in device tree")
+        ## Check that device is valid
+        elif not isinstance(device, OSLDevice):
+            raise ValueError(
+                "Valid OSLDevice must be specified for non-root device manager"
+            )
+        ## Initialise the device manager object for a device and add it to the device tree
+        else:
             DeviceManager._device_tree[device.path] = device
             device._log.info(f"Added {device} to device tree")
 
@@ -166,8 +181,9 @@ class DeviceManager:
         """
         if not self.lock:
             raise RuntimeError("Device tree is not locked and cannot be updated")
-        for device in self._device_tree.values():
-            device.update()
+        with self._timer:
+            for device in self._device_tree.values():
+                device.update()
 
     @property
     def lock(self) -> bool:
@@ -176,6 +192,24 @@ class DeviceManager:
     @property
     def cwd(self) -> DevicePath:
         return self._cwd
+
+    @property
+    def frequency(self) -> float:
+        """Frequency of DeviceManager clock
+
+        Returns:
+            float: Frequency (Hz) of DeviceManager clock
+        """
+        return 1 / DeviceManager._clock.dt
+
+    @frequency.setter
+    def frequency(self, value: float) -> None:
+        """Set frequency of DeviceManager clock
+
+        Args:
+            value (float): Frequency (Hz) of DeviceManager clock
+        """
+        DeviceManager._clock.dt = 1 / value
 
     @property
     def clock(self) -> SoftRealtimeLoop:
@@ -197,9 +231,11 @@ class DeviceManager:
         try:
             del DeviceManager._device_tree[self._cwd]
         except KeyError:
-            print(f"Device {self._cwd} not found in device tree")
+            DeviceManager._log.debug(
+                f"During deletion of {self}, {self._cwd} not found in device tree"
+            )
         else:
-            print(f"Removed {self._cwd} from device tree")
+            DeviceManager._log.info(f"Removed {self._cwd} from device tree")
 
     @classmethod
     def match(cls, path: DevicePath) -> list["OSLDevice"]:
@@ -308,7 +344,7 @@ class OSLDevice(ABC):
     def stop(self) -> None:
         self._log.info(f"STOP")
         self._stop()
-        self._log.info(f"Timer stats: {self._timer}")
+        self._log.info(self._timer)
 
     def update(self) -> None:
         with self._timer:
