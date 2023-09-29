@@ -1,17 +1,145 @@
+from typing import Union
+
 import time
+from abc import abstractmethod
+from dataclasses import dataclass, field
 
 import numpy as np
 from smbus2 import SMBus
 
+from opensourceleg.device import DeviceManager, DevicePath, Interface, OSLDevice
 from opensourceleg.joints import Joint
 from opensourceleg.logger import Logger
+from opensourceleg.units import DEFAULT_UNITS, UnitsDefinition
 
 
-class StrainAmp:
+class Loadcell(Interface):
+    @property
+    @abstractmethod
+    def fx(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def fy(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def fz(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def mx(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def my(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def mz(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def loadcell_data(self) -> [float]:
+        pass
+
+    @property
+    @abstractmethod
+    def cal(self) -> "LoadcellCalibration":
+        pass
+
+
+@dataclass
+class LoadcellCalibration:
+    """A class to manage the loadcell calibration matrix and zero offset
+
+
+    Args:
+        nChannels (int): number of loadcell channels
+        loadcell_matrix (np.ndarray): loadcell calibration matrix (nChannels x nChannels)
+        loadcell_zero (np.ndarray): loadcell zero offset (1 x nChannels)
+        amp_gain (float): gain of the strain amplifier
+        exc (float): excitation voltage of the strain amplifier
+
+    """
+
+    nChannels: int = field(default=6)  #: number of loadcell channels
+    loadcell_matrix: np.ndarray = field(
+        default=None
+    )  #: loadcell calibration matrix (nChannels x nChannels)
+    loadcell_zero: np.ndarray = field(
+        default=None
+    )  #: loadcell zero offset (1 x nChannels)
+    exc: float = field(default=5)  # excitation voltage of the strain guague
+
+    def __post_init__(self):
+        if self.loadcell_matrix is None:
+            self.loadcell_matrix = np.identity(self.nChannels)
+        else:
+            self.loadcell_matrix = np.array(self.loadcell_matrix)
+            if self.loadcell_matrix.shape != (self.nChannels, self.nChannels):
+                raise ValueError(
+                    f"Loadcell matrix for nChannels={self.nChannels} \
+                    must be of shape ({self.nChannels}, {self.nChannels})"
+                )
+        if self.loadcell_zero is not None:
+            self.loadcell_zero = np.array(self.loadcell_zero)
+            if self.loadcell_zero.shape != (1, self.nChannels):
+                raise ValueError(
+                    f"Loadcell zero for nChannels={self.nChannels} \
+                    must be of shape ({self.nChannels},) or (1, {self.nChannels})"
+                )
+
+    def apply(self, loadcell_output: np.ndarray) -> np.ndarray:
+        """Apply the calibration matrix and zero offset to the loadcell output
+
+        This takes the raw loadcell output from an OUT = [Ch0, Ch1, ... ChN] and
+        converts it to mV/V by multiplying by 1000*EXC (excitation voltage).
+
+        Then, the loadcell calibration matrix is applied to convert the loadcell
+        output to a wrench in N and Nm.
+
+        Finally, any zero offset is subtracted from the wrench.
+
+        Args:
+            loadcell_output (np.ndarray): loadcell output (1 x nChannels) in units of V
+
+        """
+        if self.loadcell_zero is None:
+            return np.transpose(self.loadcell_matrix.dot(np.transpose(loadcell_output)))
+        else:
+            return (
+                np.transpose(self.loadcell_matrix.dot(np.transpose(loadcell_output)))
+                - self.loadcell_zero
+            )
+
+
+class StrainAmp(OSLDevice, Loadcell):
+
+    cal: LoadcellCalibration
+
+    def __init__(self, name: str = "StrainAmp", **kwargs) -> None:
+        super().__init__(name=name, **kwargs)
+
+
+class FlexSEAStrainAmp(StrainAmp):
     """
     A class to directly manage the 6ch strain gauge amplifier over I2C.
     Author: Mitry Anderson
     """
+
+    nCHANNELS: int = 6
+    ADC_GAIN: int = 125  # gain of the strain amplifier
+    ADC_FS: int = 2**12  # full scale of the strain amplifier (4096)
+    ADC_VREF = 5  # volts
+
+    AMP_EXC = 5  # volts
 
     # register numbers for the "ezi2c" interface on the strainamp
     # found in source code here: https://github.com/JFDuval/flexsea-strain/tree/dev
@@ -28,17 +156,28 @@ class StrainAmp:
     MEM_R_CH6_H = 18
     MEM_R_CH6_L = 19
 
-    def __init__(self, bus, I2C_addr=0x66) -> None:
-        """Create a strainamp object, to talk over I2C"""
-        # self._I2CMan = I2CManager(bus)
-        self._SMBus = SMBus(bus)
-        time.sleep(1)
+    def __init__(
+        self,
+        name: str = "FlexSEAStrainAmp",
+        bus: str = "/dev/i2c-1",
+        I2C_addr: int = 0x66,
+        calibration: LoadcellCalibration = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(name=name, **kwargs)
         self.bus = bus
         self.addr = I2C_addr
-        self.genvars = np.zeros((3, 6))
-        self.indx = 0
-        self.is_streaming = True
-        self.data = []
+
+        if calibration is None:
+            self._adc_datacal = LoadcellCalibration(
+                nChannels=self.nCHANNELS, exc=self.AMP_EXC
+            )
+        else:
+            self._cal = calibration
+            self._cal.exc = self.AMP_EXC
+
+        self._adc_data: np.ndarray
+        self.output_data: np.ndarray = np.zeros(self.nCHANNELS)
         self.failed_reads = 0
 
     def read_uncompressed_strain(self):
@@ -50,37 +189,39 @@ class StrainAmp:
         return self.unpack_uncompressed_strain(data)
 
     def read_compressed_strain(self):
-        """Used for more recent versions of strain amp firmware"""
+        """Read the compressed adc data from the strain amp
+
+        Used for more recent versions of strain amp firmware
+
+        Raises:
+            Exception: If the strain amp fails to respond after 5 attempts
+
+        """
         try:
-            self.data = self._SMBus.read_i2c_block_data(self.addr, self.MEM_R_CH1_H, 10)
+            i2c_data = self._SMBus.read_i2c_block_data(self.addr, self.MEM_R_CH1_H, 10)
             self.failed_reads = 0
         except OSError as e:
             self.failed_reads += 1
             # print("\n read failed")
             if self.failed_reads >= 5:
-                raise Exception("Load cell unresponsive.")
-        # unpack them and return as nparray
-        return self.unpack_compressed_strain(self.data)
+                raise OSError("Load cell unresponsive.")
+            self._log.warning(
+                f"Failed to read from strain amp with {self.failed_reads} attempts"
+            )
 
-    def update(self):
-        """Called to update data of strain amp. Also returns data."""
-        self.genvars[self.indx, :] = self.read_compressed_strain()
-        self.indx = (self.indx + 1) % 3
-        return np.median(self.genvars, axis=0)
+        self.unpack_compressed_strain(i2c_data)
 
-    @staticmethod
-    def unpack_uncompressed_strain(data):
-        """Used for an older version of the strain amp firmware (at least pre-2017)"""
-        ch1 = (data[0] << 8) | data[1]
-        ch2 = (data[2] << 8) | data[3]
-        ch3 = (data[4] << 8) | data[5]
-        ch4 = (data[6] << 8) | data[7]
-        ch5 = (data[8] << 8) | data[9]
-        ch6 = (data[10] << 8) | data[11]
-        return np.array([ch1, ch2, ch3, ch4, ch5, ch6])
+    def _start(self):
+        self._SMBus = SMBus(self.bus)
 
-    @staticmethod
-    def unpack_compressed_strain(data):
+    def _update(self):
+        self.read_compressed_strain()
+        self._calculate_strain_data()
+
+    def _stop(self):
+        self._SMBus.close()
+
+    def unpack_compressed_strain(self, data: list[int]):
         """Used for more recent versions of strainamp firmware"""
         # ch1 = (data[0] << 4) | ( (data[1] >> 4) & 0x0F)
         # ch2 = ( (data[1] << 8) & 0x0F00) | data[2]
@@ -89,7 +230,7 @@ class StrainAmp:
         # ch5 = (data[6] << 4) | ( (data[7] >> 4) & 0x0F)
         # ch6 = ( (data[7] << 8) & 0x0F00) | data[8]
         # moved into one line to save 0.02ms -- maybe pointless but eh
-        return np.array(
+        self._adc_data = np.array(
             [
                 (data[0] << 4) | ((data[1] >> 4) & 0x0F),
                 ((data[1] << 8) & 0x0F00) | data[2],
@@ -100,174 +241,68 @@ class StrainAmp:
             ]
         )
 
-    @staticmethod
-    def strain_data_to_wrench(
-        unpacked_strain, loadcell_matrix, loadcell_zero, exc=5, gain=125
-    ):
-        """Converts strain values between 0 and 4095 to a wrench in N and Nm"""
-        loadcell_signed = (unpacked_strain - 2048) / 4095 * exc
-        loadcell_coupled = loadcell_signed * 1000 / (exc * gain)
-        return np.reshape(
-            np.transpose(loadcell_matrix.dot(np.transpose(loadcell_coupled)))
-            - loadcell_zero,
-            (6,),
-        )
+    def _calculate_strain_data(self):
+        """Converts strain values between 0 and 4095 to a wrench in N and Nm
 
-    @staticmethod
-    def wrench_to_strain_data(measurement, loadcell_matrix, exc=5, gain=125):
-        """Wrench in N and Nm to the strain values that would give that wrench"""
-        loadcell_coupled = (np.linalg.inv(loadcell_matrix)).dot(measurement)
-        loadcell_signed = loadcell_coupled * (exc * gain) / 1000
-        return ((loadcell_signed / exc) * 4095 + 2048).round(0).astype(int)
-
-
-class Loadcell:
-    def __init__(
-        self,
-        dephy_mode: bool = False,
-        joint: Joint = None,
-        amp_gain: float = 125.0,
-        exc: float = 5.0,
-        loadcell_matrix: np.array = None,
-        logger: "Logger" = None,
-    ) -> None:
-        self._is_dephy = dephy_mode
-        self._joint = joint
-        self._amp_gain = amp_gain
-        self._exc = exc
-        self._adc_range = 2**12 - 1
-        self._offset = (2**12) / 2
-        self._lc = None
-
-        if not self._is_dephy:
-            self._lc = StrainAmp(bus=1, I2C_addr=0x66)
-
-        if not loadcell_matrix:
-            self._loadcell_matrix = np.array(
-                [
-                    (-38.72600, -1817.74700, 9.84900, 43.37400, -44.54000, 1824.67000),
-                    (-8.61600, 1041.14900, 18.86100, -2098.82200, 31.79400, 1058.6230),
-                    (
-                        -1047.16800,
-                        8.63900,
-                        -1047.28200,
-                        -20.70000,
-                        -1073.08800,
-                        -8.92300,
-                    ),
-                    (20.57600, -0.04000, -0.24600, 0.55400, -21.40800, -0.47600),
-                    (-12.13400, -1.10800, 24.36100, 0.02300, -12.14100, 0.79200),
-                    (-0.65100, -28.28700, 0.02200, -25.23000, 0.47300, -27.3070),
-                ]
-            )
-        else:
-            self._loadcell_matrix = loadcell_matrix
-
-        self._loadcell_data = None
-        self._prev_loadcell_data = None
-
-        self._loadcell_zero = np.zeros((1, 6), dtype=np.double)
-        self._zeroed = False
-        self._log = logger
-
-    def reset(self):
-        self._zeroed = False
-        self._loadcell_zero = np.zeros((1, 6), dtype=np.double)
-
-    def update(self, loadcell_zero=None):
+        TODO: This function should be split between the channels and moved to the
+        property getters to avoid doing unnecessary calculations when strain
+        is not accessed.
         """
-        Computes Loadcell data
-
-        """
-        if self._is_dephy:
-            loadcell_signed = (self._joint.genvars - self._offset) / (
-                self._adc_range * self._exc
-            )
-        else:
-            loadcell_signed = (self._lc.update() - self._offset) / (
-                self._adc_range * self._exc
-            )
-
-        loadcell_coupled = loadcell_signed * 1000 / (self._exc * self._amp_gain)
-
-        if loadcell_zero is None:
-            self._loadcell_data = (
-                np.transpose(self._loadcell_matrix.dot(np.transpose(loadcell_coupled)))
-                - self._loadcell_zero
-            )
-        else:
-            self._loadcell_data = (
-                np.transpose(self._loadcell_matrix.dot(np.transpose(loadcell_coupled)))
-                - loadcell_zero
-            )
-
-    def initialize(self, number_of_iterations: int = 2000):
-        """
-        Obtains the initial loadcell reading (aka) loadcell_zero
-        """
-        ideal_loadcell_zero = np.zeros((1, 6), dtype=np.double)
-
-        if not self._zeroed:
-
-            if self._is_dephy:
-                if self._joint.is_streaming:
-                    self._joint.update()
-                    self.update()
-                else:
-                    self._log.warning(
-                        "[Loadcell] {self._joint.name} joint isn't streaming data. Please start streaming data before initializing loadcell."
-                    )
-                    return
-            else:
-                self.update()
-
-            self._loadcell_zero = self._loadcell_data
-
-            for _ in range(number_of_iterations):
-                self.update(ideal_loadcell_zero)
-                loadcell_offset = self._loadcell_data
-                self._loadcell_zero = (loadcell_offset + self._loadcell_zero) / 2.0
-
-            self._zeroed = True
-
-        elif (
-            input(f"[Loadcell] Would you like to re-initialize loadcell? (y/n): ")
-            == "y"
-        ):
-            self.reset()
-            self.initialize()
+        loadcell_code_signed = self._adc_data - (self.ADC_FS / 2)  # To signed code
+        V_adc = loadcell_code_signed * (self.ADC_VREF / (self.ADC_FS))  # Code to V_adc
+        mV_out = V_adc * 1000 / self.ADC_GAIN  # V_adc to mV_out
+        self.output_data = self.cal.apply(mV_out)  # Apply decoupling and zero offset
 
     @property
-    def is_zeroed(self):
-        return self._zeroed
+    def fx(self) -> float:
+        return self.output_data[0]
 
     @property
-    def fx(self):
-        return self.loadcell_data[0]
+    def fy(self) -> float:
+        return self.output_data[1]
 
     @property
-    def fy(self):
-        return self.loadcell_data[1]
+    def fz(self) -> float:
+        return self.output_data[2]
 
     @property
-    def fz(self):
-        return self.loadcell_data[2]
+    def mx(self) -> float:
+        return self.output_data[3]
 
     @property
-    def mx(self):
-        return self.loadcell_data[3]
+    def my(self) -> float:
+        return self.output_data[4]
 
     @property
-    def my(self):
-        return self.loadcell_data[4]
+    def mz(self) -> float:
+        return self.output_data[5]
 
     @property
-    def mz(self):
-        return self.loadcell_data[5]
+    def loadcell_data(self) -> [float]:
+        return self.output_data
 
     @property
-    def loadcell_data(self):
-        if self._loadcell_data is not None:
-            return self._loadcell_data[0]
-        else:
-            return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    def cal(self) -> LoadcellCalibration:
+        return self._cal
+
+
+if __name__ == "__main__":
+
+    decoupling_matrix = [
+        (8.50935, -1297.76172, 11.37597, 11.41524, 0.08508, 1279.14832),
+        (-26.36361, 734.72449, -14.30058, -1468.19031, 20.55947, 768.81042),
+        (-822.97290, -7.42868, -818.24860, -9.61839, -831.10327, 0.99515),
+        (16.68220, 0.28728, -0.36670, -0.01215, -17.29246, -0.13635),
+        (-9.87459, -0.81627, 19.66820, -0.12097, -9.77155, 0.49604),
+        (-0.33606, -21.51688, 0.03178, -19.13444, -0.05028, -20.86477),
+    ]
+
+    devmgr = DeviceManager(frequency=10)
+
+    cal = LoadcellCalibration(loadcell_matrix=decoupling_matrix)
+    sa = FlexSEAStrainAmp(bus="/dev/i2c-1", I2C_addr=0x66, calibration=cal)
+    with devmgr:
+        for tick in devmgr.clock:
+            devmgr.update()
+            ##print(f"Fx: {sa.fx:.5f} N Fy: {sa.fy:.2f} N Fz: {sa.fz:.2f} N")
+            time.sleep(0.1)
