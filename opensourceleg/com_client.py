@@ -2,7 +2,7 @@ from typing import Any
 
 import signal
 import socket
-from time import sleep, time
+from time import perf_counter, sleep, time
 
 from opensourceleg.com_protocol import OSLMsg, SocketIOFrame
 
@@ -68,9 +68,12 @@ class DeviceProxy:
         self._remote_osl = remote_osl
 
     def __getattr__(self, attr: str) -> Any:
+        tick = perf_counter()
         msg = OSLMsg(0, "GET", {self._path: {attr: None}})
         self._remote_osl._send(msg)
         res = self._remote_osl._recv().data[self._path][attr]
+        tock = perf_counter()
+        # print(f"[Client] {self._path}.{attr} took {(tock - tick)*1000:.1f}ms")
         return res
 
     def __setattr__(self, attr: str, value):
@@ -78,6 +81,11 @@ class DeviceProxy:
             super().__setattr__(attr, value)
             return
         msg = OSLMsg(0, "CALL", {self._path: {attr: {"args": [value], "kwargs": {}}}})
+        self._remote_osl._send(msg)
+        return self._remote_osl._recv()
+
+    def call(self, attr: str, *args, **kwargs):
+        msg = OSLMsg(0, "CALL", {self._path: {attr: {"args": args, "kwargs": kwargs}}})
         self._remote_osl._send(msg)
         return self._remote_osl._recv()
 
@@ -102,12 +110,25 @@ if __name__ == "__main__":
             print("[MAIN] Leg is already homed")
         else:
             print("[MAIN] Homing leg")
+            if leg_proxy.state != "idle":
+                leg_proxy.trigger = "idle"
             leg_proxy.trigger = "start_home"
             while not leg_proxy.is_homed:
+                print("\033[A\033[A")
                 print(f"Knee angle: {knee_proxy.position:.3f}")
             print("[MAIN] Leg is homed")
-            leg_proxy.trigger = "offset"
+        leg_proxy.trigger = "usercontrol"
 
-            timeout = time() + 2
-            while time() < timeout:
-                print(f"Knee angle: {knee_proxy.position:.3f}")
+        angle_ref = 0.0
+
+        while True:
+            try:
+                angle = knee_proxy.position
+                print("\033[A                                       \033[A")
+                angle_ref = float(input(f"Input Θ_ref (Θ: {angle:.3f}rad): "))
+            except ValueError:
+                continue
+            if -0.4 < angle_ref < 0.4:
+                leg_proxy.call("trigger", "joint_state_update", angle=angle_ref)
+            else:
+                print("Θ_ref out of range")

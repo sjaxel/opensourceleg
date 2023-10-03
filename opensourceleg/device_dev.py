@@ -37,7 +37,7 @@ class HomingState(OSLState):
         state_transitions = [
             {
                 "trigger": "start_home",
-                "source": ["idle", "offset"],
+                "source": ["idle", "annoyed"],
                 "dest": self.NAME,
             },
             {
@@ -75,25 +75,30 @@ class IdleState(OSLState):
     def init_transitions(self) -> list[dict]:
         state_transitions = [
             {
+                "trigger": "idle",
+                "source": ["Annoyed", "homing", "usercontrol"],
+                "dest": self.NAME,
+            },
+            {
                 "trigger": "stopped",
                 "source": "idle",
                 "dest": "off",
-            }
+            },
         ]
         return state_transitions
 
 
-class OffsetState(OSLState):
-    NAME = "offset"
+class UserControlState(OSLState):
+    NAME = "usercontrol"
     JOINT_STATES: list[JointState] = [
         JointState(
-            joint="/leg/knee", mode=ImpedenceMode, impedance=Gains(K=25, B=1), angle=0.1
+            joint="/leg/knee", mode=ImpedenceMode, impedance=Gains(K=25, B=1), angle=0.0
         )
     ]
 
     def init_transitions(self) -> list[dict]:
         state_transitions = [
-            {"trigger": "offset", "source": "idle", "dest": self.NAME},
+            {"trigger": "usercontrol", "source": "idle", "dest": self.NAME},
             {
                 "trigger": "stopped",
                 "source": self.NAME,
@@ -104,8 +109,21 @@ class OffsetState(OSLState):
                 "source": self.NAME,
                 "dest": None,
             },
+            {
+                "trigger": "joint_state_update",
+                "source": self.NAME,
+                "dest": None,
+                "after": self._update_joint_state,
+            },
         ]
         return state_transitions
+
+    def _update_joint_state(self, **kwargs) -> None:
+
+        for joint in self.JOINT_STATES:
+            for key, value in kwargs.items():
+                setattr(joint, key, value)
+            joint()
 
 
 class OffState(OSLState):
@@ -181,7 +199,7 @@ if __name__ == "__main__":
     comserver = ComServer()
 
     devmgr = DeviceManager()
-    devmgr.frequency = 100
+    devmgr.frequency = 200
 
     msgserver = MsgServer(devmgr, comserver)
 
@@ -191,7 +209,7 @@ if __name__ == "__main__":
     osl = OSL(
         name="leg",
         basepath="/",
-        states=[HomingState, IdleState, OffState, AnnoyedState, OffsetState],
+        states=[HomingState, IdleState, OffState, AnnoyedState, UserControlState],
     )
 
     JointState.devmgr = devmgr
