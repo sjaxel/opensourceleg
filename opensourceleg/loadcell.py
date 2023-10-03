@@ -7,9 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from smbus2 import SMBus
 
-from opensourceleg.device import DeviceManager, DevicePath, Interface, OSLDevice
-from opensourceleg.joints import Joint
-from opensourceleg.logger import Logger
+from opensourceleg.device import DeviceManager, Interface, OSLDevice
 from opensourceleg.units import DEFAULT_UNITS, UnitsDefinition
 
 
@@ -179,14 +177,6 @@ class FlexSEAStrainAmp(StrainAmp):
         self._adc_data: np.ndarray
         self.output_data: np.ndarray = np.zeros(self.nCHANNELS)
         self.failed_reads = 0
-
-    def read_uncompressed_strain(self):
-        """Used for an older version of the strain amp firmware (at least pre-2017)"""
-        data = []
-        for i in range(self.MEM_R_CH1_H, self.MEM_R_CH6_L + 1):
-            data.append(self._SMBus.read_byte_data(self.addr, i))
-
-        return self.unpack_uncompressed_strain(data)
 
     def read_compressed_strain(self):
         """Read the compressed adc data from the strain amp

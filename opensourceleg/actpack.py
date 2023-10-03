@@ -1,6 +1,5 @@
 from typing import TypeVar
 
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from logging import Logger
@@ -133,8 +132,8 @@ class ActpackMode(ABC):
         return f"{self.__class__.__name__}"
 
     def enter(self):
-        self._driver._log.info(f"Entering {self}")
         if self._driver._mode == None:
+            self._driver._log.info(f"Entering {self}")
             self._driver._mode = self
             self._enter()
         elif self._driver._mode != self:
@@ -142,7 +141,7 @@ class ActpackMode(ABC):
             self._driver._mode = self
             self._enter()
         else:
-            self._driver._log.warn(f"Already in {self}, not not run _enter()")
+            self._driver._log.debug(f"Already in {self}, not not run _enter()")
 
     def exit(self):
         self._driver._mode = None

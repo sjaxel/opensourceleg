@@ -252,32 +252,5 @@ class OSLv2Joint(OSLDevice, Joint):
         self.devmgr(Actuator, "./actpack").torque = torque / self._transmission.set(1)
 
 
-@dataclass
-class JointState:
-
-    joint: Joint
-    mode: ActpackMode
-    angle: float = None
-    K: float = None
-    B: float = None
-    velocity: float = None
-    torque: float = None
-
-    def set(self):
-        assert self.mode and self.joint, "Joint and mode must be set"
-        if self.mode:
-            self.joint.mode = self.mode
-        if self.K and self.B:
-            self.joint.gains = Gains(K=self.K, B=self.B)
-        if self.B:
-            self.joint.B = self.B
-        if self.angle:
-            self.joint.position = self.angle
-        if self.velocity:
-            self.joint.velocity = self.velocity
-        if self.torque:
-            self.joint.torque = self.torque
-
-
 if __name__ == "__main__":
     print("Module not executable")
