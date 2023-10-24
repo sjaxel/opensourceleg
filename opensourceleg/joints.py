@@ -59,6 +59,12 @@ class Joint(Actuator):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
+
+    @property
+    @abstractmethod
+    def is_homed(self) -> bool:
+        pass
+
     @property
     def impedance(self) -> Gains:
         pass
@@ -74,24 +80,25 @@ class Joint(Actuator):
 
 class OSLv2Joint(OSLDevice, Joint):
     GEAR_RATIO = (18, 83)
+    HOMING_TOLERANCE = 0.002
 
     def __init__(
         self,
         name: str = "joint",
         gear_ratio: tuple[int, int] = GEAR_RATIO,
         homing_speed: float = 0.1,
-        home: bool = True,
+        direction = 1,
         **kwargs,
     ) -> None:
         super().__init__(name=name, **kwargs)
         self._transmission = Transmission(gear_ratio)
         self._current_mode = None
         self._homing_speed = homing_speed
-        self._home = home
+        self._direction = direction
+        self._actpack_offset: float = 0
 
     def _start(self):
-        if self._home:
-            self.home()
+        pass
 
     def _stop(self):
         pass
@@ -132,6 +139,26 @@ class OSLv2Joint(OSLDevice, Joint):
         self.mode = IdleMode
 
     @property
+    def is_homed(self) -> bool:
+        return isclose(self.position, 0, abs_tol=self.HOMING_TOLERANCE)
+
+    def calculate_actpack_offset(self) -> None:
+        """
+        The Actpack encoder might not be aligned to the joint zero. This function
+        calculates the offset between the actpack zero and the joint zero. 
+
+        This function should be called when the joint is in the zero position.
+        
+        This offset is then used when setting the joint position.
+        """
+        actpack_output = self.devmgr(Encoder, "./actpack").position * self._direction
+        actpack_pos = self._transmission.get(actpack_output)
+        diff = actpack_pos - self.position
+        self._actpack_offset = diff
+        self._log.info(f"SET Actpack offset: {self._actpack_offset:.3f} rad")
+
+
+    @property
     def mode(self) -> ActpackMode:
         """Get joint control mode
 
@@ -154,6 +181,7 @@ class OSLv2Joint(OSLDevice, Joint):
         Raises:
             KeyError: If the control mode is not supported by the driver
         """
+        self._log.info(f"Setting joint {self.name} mode to {controlmode}")
         self.devmgr(Actuator, device_path="./actpack").mode = controlmode
 
     @property
@@ -199,13 +227,20 @@ class OSLv2Joint(OSLDevice, Joint):
     def position(self, value: float):
         """Set joint position command in radians
 
+        This accounts for any offset between the actpack zero and the joint zero.
+        The actpack_offset is in the gear context of the joint. This means that
+        the offset is calculated after the transmission ratio is applied. This
+        means that the actpack_offset is in the same units as the joint position.
+
+        The actpack_offset is calculated when the joint is started.
+
         Args:
             value (float): Joint position command in radians
 
         Raises:
             RuntimeError: If the control mode does not support position control
-        """
-        self.devmgr(Actuator, "./actpack").position = self._transmission.set(value)
+        """        
+        self.devmgr(Actuator, "./actpack").position =((self._transmission.set(value + self._actpack_offset)) * self._direction)
 
     @property
     @Units.to_defaults("velocity")
@@ -227,7 +262,7 @@ class OSLv2Joint(OSLDevice, Joint):
         Raises:
             RuntimeError: If the control mode does not support velocity control
         """
-        self.devmgr(Actuator, "./actpack").velocity = self._transmission.set(value)
+        self.devmgr(Actuator, "./actpack").velocity = (self._transmission.set(value) * self._direction)
 
     @property
     def torque(self) -> float:
@@ -249,7 +284,7 @@ class OSLv2Joint(OSLDevice, Joint):
             RuntimeError: If the control mode does not support torque control
 
         """
-        self.devmgr(Actuator, "./actpack").torque = torque / self._transmission.set(1)
+        self.devmgr(Actuator, "./actpack").torque = (torque * self._direction) / self._transmission.set(1)
 
 
 if __name__ == "__main__":

@@ -140,6 +140,7 @@ class ActpackMode(ABC):
             self._driver._mode.exit()
             self._driver._mode = self
             self._enter()
+            self._driver._log.info(f"Entering {self}")
         else:
             self._driver._log.debug(f"Already in {self}, not not run _enter()")
 
@@ -321,7 +322,7 @@ class Actpack(OSLDevice, Actuator):
     def gains(self, gains: Gains) -> None:
         try:
             self.mode.gains = gains
-            self._log.debug(f"Set gains to {gains}")
+            self._log.info(f"Set gains to {gains}")
         except AttributeError:
             raise RuntimeError(f"{self.mode} does not support setting gains")
 

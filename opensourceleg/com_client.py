@@ -54,6 +54,7 @@ class RemoteOSL:
         if len(messages) != 1:
             raise ValueError(f"Expected 1 message, got {len(messages)}")
         if messages[0].type != "ACK":
+            print(f"[Client] NACK data: {messages[0].data}")
             raise ValueError(f"Expected ACK message, got {messages[0].type}")
         return messages[0]
 
@@ -104,6 +105,7 @@ if __name__ == "__main__":
 
     with RemoteOSL() as osl:
         leg_proxy = DeviceProxy("/leg", osl)
+        ankle_proxy = DeviceProxy("/leg/ankle", osl)
         knee_proxy = DeviceProxy("/leg/knee", osl)
 
         if leg_proxy.is_homed:
@@ -113,9 +115,11 @@ if __name__ == "__main__":
             if leg_proxy.state != "idle":
                 leg_proxy.trigger = "idle"
             leg_proxy.trigger = "start_home"
-            while not leg_proxy.is_homed:
-                print("\033[A\033[A")
+            while leg_proxy.state == "homing":
+                # print("\033[A\033[A")
+                # print("\033[A\033[A")
                 print(f"Knee angle: {knee_proxy.position:.3f}")
+                print(f"Ankle angle: {ankle_proxy.position:.3f}")
             print("[MAIN] Leg is homed")
         leg_proxy.trigger = "usercontrol"
 
@@ -123,12 +127,14 @@ if __name__ == "__main__":
 
         while True:
             try:
-                angle = knee_proxy.position
-                print("\033[A                                       \033[A")
-                angle_ref = float(input(f"Input Θ_ref (Θ: {angle:.3f}rad): "))
+                ankle_angle = ankle_proxy.position
+                knee_angle = knee_proxy.position
+                print(f"Ankle angle: {ankle_angle:.3f}rad, Knee angle: {knee_angle:.3f}rad")
+                angle_ref = float(input(f"Input Θ_ref: "))
             except ValueError:
                 continue
             if -0.4 < angle_ref < 0.4:
-                leg_proxy.call("trigger", "joint_state_update", angle=angle_ref)
+                data = {'/leg/ankle': {'angle': angle_ref}}
+                leg_proxy.call("trigger", "joint_state_update", **data)
             else:
                 print("Θ_ref out of range")

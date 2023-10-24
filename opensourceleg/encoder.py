@@ -11,6 +11,7 @@ from opensourceleg.device import (
     UnitsDefinition,
     abstractmethod,
 )
+from opensourceleg.device import DeviceManager
 from opensourceleg.utilities import from_twos_compliment, to_twos_compliment
 
 
@@ -301,7 +302,7 @@ class AS5048A_Encoder(OSLDevice, Encoder):
             OverflowError: If value >= 2^14
         """
         assert (
-            0 < value < (AS5048A_Encoder.ENC_RESOLUTION - 1)
+            0 <= value < (AS5048A_Encoder.ENC_RESOLUTION - 1)
         ), "Zero position must be between 0 and 16383"
         try:
             payload = AS5048A_Encoder._set_14bit(value)
@@ -386,27 +387,46 @@ class AS5048A_Encoder(OSLDevice, Encoder):
 
 if __name__ == "__main__":
 
-    custom_units = UnitsDefinition()
-    custom_units.update(DEFAULT_UNITS)
-    custom_units["position"] = "deg"
+    devmgr = DeviceManager()
+    devmgr.frequency = 10
 
-    enc = AS5048A_Encoder(basepath="/devices/", bus="/dev/i2c-1", units=custom_units)
+    ankle_enc = AS5048A_Encoder(
+        name="ankle",
+        basepath="/",
+        bus="/dev/i2c-1",
+        A1_adr_pin=False,
+        A2_adr_pin=False,
+        zero_position=13342,
+    )
 
-    print(enc._units)
+    knee_enc = AS5048A_Encoder(
+        name="knee",
+        basepath="/",
+        bus="/dev/i2c-1",
+        A1_adr_pin=True,
+        A2_adr_pin=False,
+        zero_position=15942,
+    )
 
-    with enc:
-        enc.zero_position = 0
-        enc.update()
-        enc._log.info(f"Zero registers: {enc.zero_position}")
-        enc._log.info(f"Enc output: {enc.encoder_output}")
-        enc.zero_position = enc.encoder_output
-        enc._log.info(f"Zero registers: {enc.zero_position}")
-        enc._log.info(f"Enc output: {enc.encoder_output}")
-        enc.update()
-        enc._log.info(f"Zero registers: {enc.zero_position}")
-        enc._log.info(f"Enc output: {enc.encoder_output}")
 
-        while True:
-            enc.update()
-            enc._log.info(f"Position: {enc.position:.3f}")
-            time.sleep(2)
+
+    with devmgr:
+
+        # enc.zero_position = 0
+        knee_enc.update()
+        knee_enc._log.info(f"Zero registers: {knee_enc.zero_position}")
+        knee_enc._log.info(f"Enc output: {knee_enc.encoder_output}")
+        # enc.zero_position = enc.encoder_output
+        # enc._log.info(f"Zero registers: {enc.zero_position}")
+        # enc._log.info(f"Enc output: {enc.encoder_output}")
+        # enc.update()
+        # enc._log.info(f"Zero registers: {enc.zero_position}")
+        # enc._log.info(f"Enc output: {enc.encoder_output}")
+        for tick, elapsed in devmgr.clock:
+            devmgr.update()
+            knee_enc._log.info(f"Knee angle: {knee_enc.position:.3f}")
+            ankle_enc._log.info(f"Ankle angle: {ankle_enc.position:.3f}")
+
+        
+        knee_enc._log.info(f"Enc output: {knee_enc.encoder_output}")
+

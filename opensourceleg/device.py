@@ -98,6 +98,8 @@ class DeviceManager:
             self._cwd.parent not in DeviceManager._device_tree
             and self._cwd.parent != DeviceManager.ROOT
         ):
+            print(f"Class device_tree: {DeviceManager._device_tree}")
+            print(f"Instance device_tree: {self._device_tree}")
             raise KeyError(f"Parent device {self._cwd.parent} not found in device tree")
         ## Check that a device does not already exist in the path
         elif self._cwd in DeviceManager._device_tree:
@@ -224,6 +226,29 @@ class DeviceManager:
                 raise KeyError(f"Device {devicepath} not found in device tree")
         except Exception as e:
             raise e
+        
+    def query(self, interface: type[DeviceInterface], pattern: str) -> list[DeviceInterface]:
+        """Query the device tree for a device that implements an interface
+
+        Args:
+            interface (type[DeviceInterface]): Interface to be queried
+            pattern (str): Glob-style pattern to match against device paths
+
+        Raises:
+            KeyError: If no device is found that implements the interface
+
+        Returns:
+            list[DeviceInterface]: Device that implements the interface
+        """
+        res: list[DeviceInterface] = []
+        for key, value in DeviceManager._device_tree.items():
+            if key.match(pattern) and interface in value._implemented_interfaces:
+                res.append(value)
+        if res:
+            return res
+        else:
+            raise KeyError(f"No device with pattern '{pattern}' found that implements {interface}")
+
 
     def __del__(self) -> None:
         if self._cwd == DeviceManager.ROOT:
