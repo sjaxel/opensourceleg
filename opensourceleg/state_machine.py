@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # A simple and scalable Finite State Machine module
 
-from typing import Dict, Any, Callable, ClassVar, List, Optional
+from typing import Any, Callable, ClassVar, Dict, List, Optional
 
 import time
 from abc import ABC, abstractmethod
@@ -14,6 +14,7 @@ from transitions import Machine, State
 from opensourceleg.actpack import ActpackMode, Gains, IdleMode
 from opensourceleg.device import DeviceManager, DevicePath, OSLDevice
 from opensourceleg.joints import Joint
+
 
 class DeviceSettings(ABC):
     @abstractmethod
@@ -45,9 +46,9 @@ class JointState(DeviceSettings):
         if self.torque is not None:
             joint.torque = self.torque
 
-class StateSettings:
 
-    def __init__(self, keys: List[DevicePath]):
+class StateSettings:
+    def __init__(self, keys: list[DevicePath]):
         self._settings: dict[DevicePath, dict] = dict.fromkeys(keys, {})
 
     def __getitem__(self, path: DevicePath | str) -> dict:
@@ -57,7 +58,7 @@ class StateSettings:
             if device.match(path):
                 return {device, settings}
         raise KeyError(f"No settings found for pattern {path}")
-    
+
     def __setitem__(self, path: DevicePath | str, settings: DeviceSettings) -> None:
         if isinstance(path, str):
             path = DevicePath(path)
@@ -73,13 +74,16 @@ class StateSettings:
     def __str__(self) -> str:
         return str(self._settings)
 
+
 class OSLState(State, ABC):
     NAME: str
 
-    def __init__(self, devmgr: DeviceManager,  **kwargs) -> None:
-        super().__init__(name=self.NAME, 
-                         on_enter=[self.apply_settings, self._entry_timestamp],
-                         **kwargs)
+    def __init__(self, devmgr: DeviceManager, **kwargs) -> None:
+        super().__init__(
+            name=self.NAME,
+            on_enter=[self.apply_settings, self._entry_timestamp],
+            **kwargs,
+        )
         self._devmgr = devmgr
         self._entry_time: float = 0
         self._log: Logger = self._devmgr.getLogger("STATE:" + self.name)
@@ -87,24 +91,25 @@ class OSLState(State, ABC):
         self.init_state_settings()
         self._log.info(f"Initialized")
 
-
     def _init_settings_keys(self) -> None:
         loaded_devices = self._devmgr._device_tree.keys()
         self._stateSettings: StateSettings = StateSettings(loaded_devices)
 
     def _entry_timestamp(self) -> None:
         self._entry_time = monotonic()
-    
+
     def timeout(self, timeout: float) -> Callable[[], bool]:
         t = timeout
+
         def _check_timeout() -> bool:
             return monotonic() - self._entry_time > t
+
         return _check_timeout
-    
+
     @property
     def settings(self) -> StateSettings:
         return self._stateSettings
-    
+
     def apply_settings(self) -> None:
         for path, settings in self._stateSettings.items():
             if settings:
@@ -121,9 +126,9 @@ class OSLState(State, ABC):
         pass
 
 
-
 class OSLMachine(Machine):
     state_cls = OSLState
+
 
 class OffState(OSLState):
     NAME = "off"
@@ -143,9 +148,10 @@ class OffState(OSLState):
             },
         ]
         return state_transitions
-    
+
     def init_state_settings(self) -> None:
-        pass   
+        pass
+
 
 if __name__ == "__main__":
     js1 = JointState(mode=IdleMode, angle=0.5)

@@ -59,7 +59,6 @@ class Joint(Actuator):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
-
     @property
     @abstractmethod
     def is_homed(self) -> bool:
@@ -87,7 +86,7 @@ class OSLv2Joint(OSLDevice, Joint):
         name: str = "joint",
         gear_ratio: tuple[int, int] = GEAR_RATIO,
         homing_speed: float = 0.1,
-        direction = 1,
+        direction=1,
         **kwargs,
     ) -> None:
         super().__init__(name=name, **kwargs)
@@ -145,10 +144,10 @@ class OSLv2Joint(OSLDevice, Joint):
     def calculate_actpack_offset(self) -> None:
         """
         The Actpack encoder might not be aligned to the joint zero. This function
-        calculates the offset between the actpack zero and the joint zero. 
+        calculates the offset between the actpack zero and the joint zero.
 
         This function should be called when the joint is in the zero position.
-        
+
         This offset is then used when setting the joint position.
         """
         actpack_output = self.devmgr(Encoder, "./actpack").position * self._direction
@@ -156,7 +155,6 @@ class OSLv2Joint(OSLDevice, Joint):
         diff = actpack_pos - self.position
         self._actpack_offset = diff
         self._log.info(f"SET Actpack offset: {self._actpack_offset:.3f} rad")
-
 
     @property
     def mode(self) -> ActpackMode:
@@ -239,8 +237,10 @@ class OSLv2Joint(OSLDevice, Joint):
 
         Raises:
             RuntimeError: If the control mode does not support position control
-        """        
-        self.devmgr(Actuator, "./actpack").position =((self._transmission.set(value + self._actpack_offset)) * self._direction)
+        """
+        self.devmgr(Actuator, "./actpack").position = (
+            self._transmission.set(value + self._actpack_offset)
+        ) * self._direction
 
     @property
     @Units.to_defaults("velocity")
@@ -262,7 +262,9 @@ class OSLv2Joint(OSLDevice, Joint):
         Raises:
             RuntimeError: If the control mode does not support velocity control
         """
-        self.devmgr(Actuator, "./actpack").velocity = (self._transmission.set(value) * self._direction)
+        self.devmgr(Actuator, "./actpack").velocity = (
+            self._transmission.set(value) * self._direction
+        )
 
     @property
     def torque(self) -> float:
@@ -284,7 +286,9 @@ class OSLv2Joint(OSLDevice, Joint):
             RuntimeError: If the control mode does not support torque control
 
         """
-        self.devmgr(Actuator, "./actpack").torque = (torque * self._direction) / self._transmission.set(1)
+        self.devmgr(Actuator, "./actpack").torque = (
+            torque * self._direction
+        ) / self._transmission.set(1)
 
 
 if __name__ == "__main__":

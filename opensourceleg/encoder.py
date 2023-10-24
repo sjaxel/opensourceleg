@@ -5,13 +5,13 @@ from smbus2 import I2cFunc, SMBus
 
 from opensourceleg.device import (
     DEFAULT_UNITS,
+    DeviceManager,
     Interface,
     OSLDevice,
     Units,
     UnitsDefinition,
     abstractmethod,
 )
-from opensourceleg.device import DeviceManager
 from opensourceleg.utilities import from_twos_compliment, to_twos_compliment
 
 
@@ -408,8 +408,6 @@ if __name__ == "__main__":
         zero_position=15942,
     )
 
-
-
     with devmgr:
 
         # enc.zero_position = 0
@@ -427,6 +425,4 @@ if __name__ == "__main__":
             knee_enc._log.info(f"Knee angle: {knee_enc.position:.3f}")
             ankle_enc._log.info(f"Ankle angle: {ankle_enc.position:.3f}")
 
-        
         knee_enc._log.info(f"Enc output: {knee_enc.encoder_output}")
-

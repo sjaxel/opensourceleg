@@ -1,15 +1,13 @@
 from math import isclose
 
-from opensourceleg.state_machine import JointState, OSLState, OSLMachine, OffState
-
-from opensourceleg.device import Interface, OSLDevice, DeviceManager
+from opensourceleg.device import DeviceManager, Interface, OSLDevice
 from opensourceleg.joints import Joint
+from opensourceleg.state_machine import JointState, OffState, OSLMachine, OSLState
 
 
 class Leg(Interface):
     def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)  
-
+        super().__init__(**kwargs)
 
 
 class OSL(OSLDevice, Leg):
@@ -44,9 +42,9 @@ class OSL(OSLDevice, Leg):
         Args:
             states (list[OSLState]): The list of states to load into the OSL state machine
         """
-        self._sm: OSLMachine = OSLMachine(model=self,
-                                    initial=OffState(self.devmgr),
-                                    queued=True)
+        self._sm: OSLMachine = OSLMachine(
+            model=self, initial=OffState(self.devmgr), queued=True
+        )
 
         for state in states:
             s = state(self.devmgr)
@@ -59,20 +57,18 @@ class OSL(OSLDevice, Leg):
     def is_homed(self) -> bool:
         knee_res = self.devmgr(Joint, "./knee").is_homed
         ankle_res = self.devmgr(Joint, "./ankle").is_homed
-        
+
         return knee_res and ankle_res
 
     @property
     def sm(self) -> OSLMachine:
         """
         The state machine of the OSL
-        
+
         Returns:
             Machine: The state machine of the OSL
         """
         return self._sm
-
-
 
 
 if __name__ == "__main__":

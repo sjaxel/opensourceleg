@@ -127,9 +127,9 @@ class TMotorActpack(Actpack, Actuator, Encoder):
         self._driver.power_on()
         self._driver._send_command()
         self._driver._entered = True
-        self.mode = TMotorIdleMode
         if not self._driver.check_can_connection():
-            raise RuntimeError("Device not connected")
+            raise RuntimeError(f"Device with CAN ID {self._driver.ID} not connected")
+        self.mode = TMotorIdleMode
 
     def _stop(self):
         self._driver.power_off()

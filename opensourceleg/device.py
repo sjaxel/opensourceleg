@@ -226,8 +226,10 @@ class DeviceManager:
                 raise KeyError(f"Device {devicepath} not found in device tree")
         except Exception as e:
             raise e
-        
-    def query(self, interface: type[DeviceInterface], pattern: str) -> list[DeviceInterface]:
+
+    def query(
+        self, interface: type[DeviceInterface], pattern: str
+    ) -> list[DeviceInterface]:
         """Query the device tree for a device that implements an interface
 
         Args:
@@ -247,8 +249,9 @@ class DeviceManager:
         if res:
             return res
         else:
-            raise KeyError(f"No device with pattern '{pattern}' found that implements {interface}")
-
+            raise KeyError(
+                f"No device with pattern '{pattern}' found that implements {interface}"
+            )
 
     def __del__(self) -> None:
         if self._cwd == DeviceManager.ROOT:

@@ -129,12 +129,14 @@ if __name__ == "__main__":
             try:
                 ankle_angle = ankle_proxy.position
                 knee_angle = knee_proxy.position
-                print(f"Ankle angle: {ankle_angle:.3f}rad, Knee angle: {knee_angle:.3f}rad")
+                print(
+                    f"Ankle angle: {ankle_angle:.3f}rad, Knee angle: {knee_angle:.3f}rad"
+                )
                 angle_ref = float(input(f"Input Θ_ref: "))
             except ValueError:
                 continue
             if -0.4 < angle_ref < 0.4:
-                data = {'/leg/ankle': {'angle': angle_ref}}
+                data = {"/leg/ankle": {"angle": angle_ref}}
                 leg_proxy.call("trigger", "joint_state_update", **data)
             else:
                 print("Θ_ref out of range")
