@@ -175,6 +175,9 @@ class AS5048A_Encoder(OSLDevice, Encoder):
         self._read_data_registers()
         self._check_diagnostics()
 
+    def apply_state(self, state: Encoder.State) -> None:
+        raise NotImplementedError(f"apply_state not implemented for {self.__class__}")
+
     @staticmethod
     def _calculate_I2C_adress(a1: bool, a2: bool) -> int:
         # (a1, a2) = adress_pins

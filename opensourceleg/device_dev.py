@@ -1,5 +1,7 @@
 from typing import Any, ClassVar
 
+from numpy import deg2rad
+
 from opensourceleg.actpack import (
     ActpackMode,
     Actuator,
@@ -14,84 +16,20 @@ from opensourceleg.com_server import ComServer
 from opensourceleg.device import DeviceManager
 from opensourceleg.drivers.TMotor import TMotorActpack
 from opensourceleg.encoder import AS5048A_Encoder, Encoder
-from opensourceleg.joints import Joint, OSLv2Joint
+from opensourceleg.joints import ImpedenceGains, Joint, OSLv2Joint, VelocityGains
 from opensourceleg.loadcell import FlexSEAStrainAmp, Loadcell, LoadcellCalibration
+from opensourceleg.locomotion.init import InitMode
+from opensourceleg.locomotion.level import LevelMode
 from opensourceleg.osl import OSL, Leg
-from opensourceleg.state_machine import JointState, OSLState
-
-
-class HomingState(OSLState):
-    NAME = "homing"
-    VELOCITY_GAINS = Gains(kd=5)
-    HOMING_VELOCITY = 0.1
-
-    def init_state_settings(self) -> None:
-        self.settings["/leg/knee"] = JointState(
-            mode=SpeedMode,
-            velocity_gains=HomingState.VELOCITY_GAINS,
-        )
-        self.settings["/leg/ankle"] = JointState(
-            mode=SpeedMode,
-            velocity_gains=HomingState.VELOCITY_GAINS,
-        )
-
-        self.add_callback("exit", self._set_actpack_offsets)
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {
-                "trigger": "start_home",
-                "source": ["idle", "annoyed"],
-                "dest": self.name,
-            },
-            {
-                "trigger": "new_data",
-                "source": self.name,
-                "dest": "idle",
-                "conditions": "is_homed",
-            },
-            {
-                "trigger": "new_data",
-                "source": self.name,
-                "dest": None,
-                "after": self._updateHomingVelocity,
-            },
-        ]
-        return state_transitions
-
-    def _set_actpack_offsets(self) -> None:
-        self._devmgr(Joint, "/leg/knee").calculate_actpack_offset()
-        self._devmgr(Joint, "/leg/ankle").calculate_actpack_offset()
-
-    def _updateHomingVelocity(self) -> None:
-        err = self._devmgr(Joint, "/leg/knee").position
-        if 0 < err < 0.03:
-            velocity = -0.1
-        elif -0.03 < err < 0:
-            velocity = 0.1
-        else:
-            velocity = -(err * 3)
-
-        self._devmgr(Joint, "/leg/knee").velocity = velocity
-
-        err = self._devmgr(Joint, "/leg/ankle").position
-
-        if 0 < err < 0.03:
-            velocity = -0.1
-        elif -0.03 < err < 0:
-            velocity = 0.1
-        else:
-            velocity = -(err * 3)
-
-        self._devmgr(Joint, "/leg/ankle").velocity = velocity
+from opensourceleg.state_machine import OSLState
 
 
 class ZeroingState(OSLState):
     NAME = "zeroing"
 
     def init_state_settings(self) -> None:
-        self.settings["/leg/knee"] = JointState(mode=IdleMode)
-        self.settings["/leg/ankle"] = JointState(mode=IdleMode)
+        self.device_states["/leg/knee"] = Joint.State(mode=IdleMode)
+        self.device_states["/leg/ankle"] = Joint.State(mode=IdleMode)
 
         self.add_callback("enter", self._zero_actpack)
 
@@ -111,39 +49,13 @@ class ZeroingState(OSLState):
         self._devmgr(Encoder, "/leg/ankle/actpack").set_zero()
 
 
-class IdleState(OSLState):
-    NAME = "idle"
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {
-                "trigger": "idle",
-                "source": ["Annoyed", "homing", "usercontrol"],
-                "dest": self.name,
-            },
-            {
-                "trigger": "stopped",
-                "source": "idle",
-                "dest": "off",
-            },
-        ]
-        return state_transitions
-
-    def init_state_settings(self) -> None:
-        self.settings["/leg/knee"] = JointState(mode=IdleMode)
-        self.settings["/leg/ankle"] = JointState(mode=IdleMode)
-
-
 class UserControlState(OSLState):
     NAME = "usercontrol"
 
     def init_state_settings(self) -> None:
-        self.settings["/leg/knee"] = JointState(
-            mode=ImpedenceMode, impedance=Gains(K=40, B=5), angle=0.0
-        )
-        self.settings["/leg/ankle"] = JointState(
-            mode=ImpedenceMode, impedance=Gains(K=40, B=5), angle=0.0
-        )
+        self.device_states["/leg/knee"] = self.device_states[
+            "/leg/ankle"
+        ] = Joint.State(mode=ImpedenceMode, gains=ImpedenceGains(K=40, B=5), angle=0.0)
 
     def init_transitions(self) -> list[dict]:
         state_transitions = [
@@ -159,48 +71,26 @@ class UserControlState(OSLState):
                 "dest": None,
             },
             {
-                "trigger": "joint_state_update",
+                "trigger": "device_state_update",
                 "source": self.NAME,
                 "dest": None,
-                "after": "updateJointStates",
+                "after": self.apply_device_states,
             },
         ]
         return state_transitions
-
-
-class OffState(OSLState):
-    NAME = "off"
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {
-                "trigger": "started",
-                "source": "off",
-                "dest": "idle",
-            },
-            {
-                "trigger": "stopped",
-                "source": "*",
-                "dest": "off",
-            },
-        ]
-        return state_transitions
-
-    def init_state_settings(self) -> None:
-        pass
 
 
 class AnnoyedState(OSLState):
     NAME = "annoyed"
     TRIGGERED_ANGLE = 0.3
-    RELAXING_ANGLE = 0.025
+    RELAXING_ANGLE = 0.01
 
     def init_state_settings(self) -> None:
-        self.settings["/leg/knee"] = JointState(
-            mode=ImpedenceMode, impedance=Gains(K=30, B=10), angle=0.0
+        self.device_states["/leg/knee"] = Joint.State(
+            mode=ImpedenceMode, gains=ImpedenceGains(K=40, B=5), angle=0.0
         )
-        self.settings["/leg/ankle"] = JointState(
-            mode=ImpedenceMode, impedance=Gains(K=30, B=10), angle=0.0
+        self.device_states["/leg/ankle"] = Joint.State(
+            mode=ImpedenceMode, gains=ImpedenceGains(K=80, B=10), angle=0.0
         )
 
     def init_transitions(self) -> list[dict]:
@@ -221,7 +111,7 @@ class AnnoyedState(OSLState):
                 "trigger": "new_data",
                 "source": self.NAME,
                 "dest": "idle",
-                "conditions": self.timeout(2),
+                "conditions": self.timeout(3),
             },
             {
                 "trigger": "stopped",
@@ -232,13 +122,13 @@ class AnnoyedState(OSLState):
         return state_transitions
 
     def _becomes_annoyed(self) -> bool:
-        if abs(self._devmgr(Joint, "/leg/knee").position) > self.TRIGGERED_ANGLE:
+        if abs(self._devmgr(Joint, "/leg/ankle").angle) > self.TRIGGERED_ANGLE:
             return True
         else:
             return False
 
     def _relaxes(self) -> None:
-        if abs(self._devmgr(Joint, "/leg/knee").position) < self.RELAXING_ANGLE:
+        if abs(self._devmgr(Joint, "/leg/ankle").angle) < self.RELAXING_ANGLE:
             return True
         else:
             return False
@@ -251,13 +141,13 @@ if __name__ == "__main__":
     comserver = ComServer()
 
     devmgr = DeviceManager()
-    devmgr.frequency = 200
+    devmgr.frequency = 100
 
     msgserver = MsgServer(devmgr, comserver)
 
     ## Init the hardware devices
 
-    # Init OSL device with desired FSM states
+    # Init OSL device
     osl = OSL(
         name="leg",
         basepath="/",
@@ -272,25 +162,37 @@ if __name__ == "__main__":
         (-9.87459, -0.81627, 19.66820, -0.12097, -9.77155, 0.49604),
         (-0.33606, -21.51688, 0.03178, -19.13444, -0.05028, -20.86477),
     ]
+
+    sa_offset = [-10, -9, 33, 21, 9, 11]
+    lc_yaw_correction = deg2rad(-30)
+    lc_zero_offset = [0.710, 15.164, 32.149, 1.014, 0.376, 0.025]
+
     loadcell = FlexSEAStrainAmp(
         name="loadcell",
-        basepath="/",
+        basepath="/leg",
         bus="/dev/i2c-1",
+        amplifier_input_offset=sa_offset,
         I2C_addr=0x66,
-        calibration=LoadcellCalibration(loadcell_matrix=decoupling_matrix),
+        calibration=LoadcellCalibration(
+            loadcell_matrix=decoupling_matrix,
+            yaw=lc_yaw_correction,
+            loadcell_zero=lc_zero_offset,
+        ),
     )
 
     # Init joints
     knee_joint = OSLv2Joint(
-        name="knee", basepath="/leg", homing_speed=0.2, home=False, direction=-1
+        name="knee", basepath="/leg", homing_speed=0.2, direction=-1
     )
-    ankle_joint = OSLv2Joint(
-        name="ankle", basepath="/leg", homing_speed=0.2, home=False
-    )
+    ankle_joint = OSLv2Joint(name="ankle", basepath="/leg", homing_speed=0.2)
 
     # Init device specific TMotorActpack
-    knee_actpack = TMotorActpack(name="actpack", basepath="/leg/knee", motor_id=11)
-    ankle_actpack = TMotorActpack(name="actpack", basepath="/leg/ankle", motor_id=10)
+    knee_actpack = TMotorActpack(
+        name="actpack", basepath="/leg/knee", motor_id=11, log_level="WARN"
+    )
+    ankle_actpack = TMotorActpack(
+        name="actpack", basepath="/leg/ankle", motor_id=10, log_level="WARN"
+    )
 
     # Init AS5048A encoder
     ankle_enc = AS5048A_Encoder(
@@ -312,11 +214,19 @@ if __name__ == "__main__":
     )
 
     # Load the states into the OSL device
-    osl.initStateMachine(
-        [HomingState, ZeroingState, IdleState, OffState, AnnoyedState, UserControlState]
-    )
+    osl.initStateMachine([InitMode, LevelMode])
+
+    osl.config["user"]["height"] = 190
+    osl.config["user"]["weight"] = 20
+
+    def print_osl_state():
+        osl._log.info(f"OSL State: {osl.state}")
+        osl._log.info(f"Leg load fz: {osl.fz:.2f} N")
+        osl._log.info(f"Knee angle: {osl.knee.angle:.2f} rad")
+        osl._log.info(f"Ankle angle: {osl.ankle.angle:.2f} rad")
 
     MAINLOOP_TIMEOUT = 200 * 20  # sec
+    STATE_REPORT = 1  # sec
     """Main program loop
 
     Starts the DeviceManager and MsgServer and runs the inner clock loop
@@ -326,12 +236,19 @@ if __name__ == "__main__":
     """
 
     with devmgr, msgserver:
+        osl.home()
+        last_report = 0
         for tick, time in devmgr.clock:
             if time > MAINLOOP_TIMEOUT:
                 devmgr._log.info(f"Timeout: {time}")
                 break
             # Call the update function of all devices
             devmgr.update()
+
+            # Print the current state of the OSL device
+            if time - last_report > STATE_REPORT:
+                last_report = time
+                # print_osl_state()
 
             # Process all messages recieved over ComServer interface
             if unhandled_msg := msgserver.process():

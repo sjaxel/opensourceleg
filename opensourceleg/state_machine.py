@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # A simple and scalable Finite State Machine module
 
-from typing import Any, Callable, ClassVar, Dict, List, Optional
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Self
 
 import time
 from abc import ABC, abstractmethod
@@ -9,113 +9,96 @@ from dataclasses import dataclass, field
 from logging import Logger
 from time import monotonic
 
-from transitions import Machine, State
+from transitions.core import _LOGGER as transitionsLogger
+from transitions.extensions.nesting import HierarchicalMachine, NestedState
 
 from opensourceleg.actpack import ActpackMode, Gains, IdleMode
-from opensourceleg.device import DeviceManager, DevicePath, OSLDevice
+from opensourceleg.config import DeviceConfig, OSLConfig, StatesConfig
+from opensourceleg.device import DeviceManager, DevicePath, Interface
 from opensourceleg.joints import Joint
 
 
-class DeviceSettings(ABC):
-    @abstractmethod
-    def apply_to(self, device: OSLDevice) -> None:
-        pass
-
-
-@dataclass
-class JointState(DeviceSettings):
-
-    mode: ActpackMode = None
-    angle: float = None
-    impedance: Gains = None
-    velocity: float = None
-    velocity_gains: Gains = None
-    torque: float = None
-
-    def apply_to(self, joint: Joint) -> None:
-        if self.mode:
-            joint.mode = self.mode
-        if self.velocity_gains:
-            joint.gains = self.velocity_gains
-        if self.impedance:
-            joint.impedance = self.impedance
-        if self.angle is not None:
-            joint.position = self.angle
-        if self.velocity is not None:
-            joint.velocity = self.velocity
-        if self.torque is not None:
-            joint.torque = self.torque
-
-
-class StateSettings:
-    def __init__(self, keys: list[DevicePath]):
-        self._settings: dict[DevicePath, dict] = dict.fromkeys(keys, {})
-
-    def __getitem__(self, path: DevicePath | str) -> dict:
-        if isinstance(path, str):
-            path = DevicePath(path)
-        for device, settings in self._settings.items():
-            if device.match(path):
-                return {device, settings}
-        raise KeyError(f"No settings found for pattern {path}")
-
-    def __setitem__(self, path: DevicePath | str, settings: DeviceSettings) -> None:
-        if isinstance(path, str):
-            path = DevicePath(path)
-
-        self._settings[path] = settings
-
-    def __delitem__(self, path: DevicePath) -> None:
-        del self._settings[path]
-
-    def items(self) -> list[tuple[DevicePath, DeviceSettings]]:
-        return list(self._settings.items())
-
-    def __str__(self) -> str:
-        return str(self._settings)
-
-
-class OSLState(State, ABC):
+class OSLState(NestedState, ABC):
     NAME: str
+    SUBSTATES: ClassVar[list[type[Self]]] = []
 
-    def __init__(self, devmgr: DeviceManager, **kwargs) -> None:
+    def __init__(
+        self,
+        devmgr: DeviceManager,
+        config: OSLConfig,
+        parent_name: str = None,
+        **kwargs,
+    ) -> None:
+        # if parent_name is None:
+        #     full_name = self.NAME
+        # else:
+        #     full_name = parent_name + "_" + self.NAME
         super().__init__(
             name=self.NAME,
-            on_enter=[self.apply_settings, self._entry_timestamp],
+            on_enter=[self.apply_device_states, self._oslstate_entry_cb],
+            on_exit=[self._oslstate_exit_cb],
             **kwargs,
         )
         self._devmgr = devmgr
+
         self._entry_time: float = 0
         self._log: Logger = self._devmgr.getLogger("STATE:" + self.name)
-        self._init_settings_keys()
+        self._init_settings_storage(config)
         self.init_state_settings()
         self._log.info(f"Initialized")
 
-    def _init_settings_keys(self) -> None:
-        loaded_devices = self._devmgr._device_tree.keys()
-        self._stateSettings: StateSettings = StateSettings(loaded_devices)
+    def _init_settings_storage(self, root_config: OSLConfig) -> None:
+        self._config = StatesConfig({"device_states": {}})
+        root_config["states"][self.name] = self._config
 
-    def _entry_timestamp(self) -> None:
+    def _oslstate_entry_cb(self) -> None:
         self._entry_time = monotonic()
+        self._log.info(f"Entered state {self.name}")
+
+    def _oslstate_exit_cb(self) -> None:
+        self._log.info(f"Exited state {self.name}")
 
     def timeout(self, timeout: float) -> Callable[[], bool]:
-        t = timeout
+        """Create a timeout for use in transitions
+
+        Args:
+            timeout (float): Timeout in seconds
+
+        Returns:
+            Callable[[], bool]: A function that returns True
+                if [timeout] has passed since state entry
+
+        """
 
         def _check_timeout() -> bool:
-            return monotonic() - self._entry_time > t
+            return monotonic() - self._entry_time > timeout
 
         return _check_timeout
 
     @property
-    def settings(self) -> StateSettings:
-        return self._stateSettings
+    def config(self) -> OSLConfig:
+        return self._config
 
-    def apply_settings(self) -> None:
-        for path, settings in self._stateSettings.items():
-            if settings:
+    @property
+    def state_config(self) -> OSLConfig:
+        return self.config
+
+    @property
+    def device_states(self) -> OSLConfig:
+        return self._config["device_states"]
+
+    def apply_device_states(self) -> None:
+        try:
+            for path, device_state in self.device_states.items():
                 device = self._devmgr(Joint, path)
-                self._log.info(f"Applying {settings} to {device}")
-                settings.apply_to(device)
+                self._log.debug(f"Applying {device_state} to {device}")
+                device.apply_state(device_state)
+        except AttributeError as e:
+            self._log.error(f"Failed to apply device states to device at path {path}")
+            raise e
+        except Exception as e:
+            self._log.error(f"Failed to apply device states to device at path {path}")
+            raise e
 
     @abstractmethod
     def init_transitions(self) -> list[dict]:
@@ -126,35 +109,58 @@ class OSLState(State, ABC):
         pass
 
 
-class OSLMachine(Machine):
+class ParentOSLState(OSLState):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.init_substates()
+
+        for substate in self.SUBSTATES:
+            self.add_substate(substate(args[0], args[1], parent_name=self.name))
+
+    def init_transitions(self) -> list[dict]:
+        """Initializes the transitions for all substates of a state.
+
+        If overridden in a subclass, this method should call super().init_transitions()
+        and add the transitions to the list returned by that method.
+
+        Returns:
+            list[dict]: A list of transitions for all substates
+
+        """
+        res: list[dict] = []
+        for name, substate in self.states.items():
+            res.extend(substate.init_transitions())
+        return res
+
+    @abstractmethod
+    def init_substates(self) -> None:
+        """Populate the substates list with the substates of this state
+
+        This method should be called in the constructor of the subclass
+        and add the substates to the SUBSTATES list.
+
+        Example:
+            self.SUBSTATES = [Substate1, Substate2]
+            self.initial = Substate1 (optional)
+
+        Returns:
+            None
+        """
+        pass
+
+
+class OSLMachine(HierarchicalMachine):
     state_cls = OSLState
 
-
-class OffState(OSLState):
-    NAME = "off"
-    JOINT_STATES: dict[str, JointState] = {}
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {
-                "trigger": "started",
-                "source": "off",
-                "dest": "idle",
-            },
-            {
-                "trigger": "stopped",
-                "source": "*",
-                "dest": "off",
-            },
-        ]
-        return state_transitions
-
-    def init_state_settings(self) -> None:
-        pass
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        transitionsLogger.setLevel("WARN")
 
 
 if __name__ == "__main__":
-    js1 = JointState(mode=IdleMode, angle=0.5)
-    js1_dict = dir(js1)
-    js2 = JointState(**js1_dict)
+    js1 = Joint.State(mode=IdleMode, angle=0.5)
+    js1_dict = dict(js1)
+    print(js1_dict)
+    js2 = Joint.State(**js1_dict)
     print(js2)

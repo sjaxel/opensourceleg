@@ -1,7 +1,15 @@
 from typing import Any
 
 import json
+from abc import ABCMeta
 from dataclasses import dataclass
+
+
+class OSLJSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, ABCMeta):
+            return o.__name__
+        return json.JSONEncoder.default(self, o)
 
 
 class OSLMsg:
@@ -101,7 +109,9 @@ class SocketIOFrame:
 
         """
         # Convert the JSON string to a bytearray
-        json_bytearray = bytearray(json.dumps(msg.__dict__), "utf-8")
+        json_bytearray = bytearray(
+            json.dumps(msg.__dict__, cls=OSLJSONEncoder), "utf-8"
+        )
 
         payload_len = len(json_bytearray)
 

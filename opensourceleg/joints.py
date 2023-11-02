@@ -1,3 +1,5 @@
+from typing import Self, TypedDict
+
 from abc import abstractmethod
 from dataclasses import dataclass
 from math import isclose
@@ -10,11 +12,25 @@ from opensourceleg.actpack import (
     Gains,
     IdleMode,
     ImpedenceMode,
+    Interface,
     OSLDevice,
     SpeedMode,
     Units,
 )
 from opensourceleg.encoder import Encoder
+
+
+class JointGains(TypedDict):
+    pass
+
+
+class ImpedenceGains(JointGains):
+    K: float
+    B: float
+
+
+class VelocityGains(JointGains):
+    kd: float
 
 
 class Transmission:
@@ -48,7 +64,7 @@ class Transmission:
         return value * self._ratio[1] / self._ratio[0]
 
 
-class Joint(Actuator):
+class Joint(Interface):
     """Device class for joints
 
     Can be subclassed to support different joint types and versions
@@ -61,20 +77,43 @@ class Joint(Actuator):
 
     @property
     @abstractmethod
-    def is_homed(self) -> bool:
+    def angle(self) -> float:
+        pass
+
+    @angle.setter
+    @abstractmethod
+    def angle(self, value: float) -> None:
         pass
 
     @property
-    def impedance(self) -> Gains:
+    @abstractmethod
+    def velocity(self) -> float:
         pass
 
-    @impedance.setter
-    def impedance(self, gains: Gains) -> None:
+    @velocity.setter
+    @abstractmethod
+    def velocity(self, value: float) -> None:
+        pass
+
+    @abstractmethod
+    def calculate_actpack_offset(self) -> None:
+        pass
+
+    @property
+    @abstractmethod
+    def is_homed(self) -> bool:
         pass
 
     @abstractmethod
     def home(self):
         pass
+
+    class State(Actuator.State):
+        mode: ActpackMode | str
+        angle: float
+        gains: JointGains
+        velocity: float
+        torque: float
 
 
 class OSLv2Joint(OSLDevice, Joint):
@@ -106,6 +145,10 @@ class OSLv2Joint(OSLDevice, Joint):
         ## Note: Since the joint isn't performing any IO, this is a no-op. This might
         ## change in the future.
         pass
+
+    def apply_state(self, js: Joint.State) -> None:
+        for attr, value in js.items():
+            setattr(self, attr, value)
 
     def home(self):
         self._log.info(f"Homing joint {self.name}")
@@ -139,7 +182,7 @@ class OSLv2Joint(OSLDevice, Joint):
 
     @property
     def is_homed(self) -> bool:
-        return isclose(self.position, 0, abs_tol=self.HOMING_TOLERANCE)
+        return isclose(self.angle, 0, abs_tol=self.HOMING_TOLERANCE)
 
     def calculate_actpack_offset(self) -> None:
         """
@@ -152,7 +195,7 @@ class OSLv2Joint(OSLDevice, Joint):
         """
         actpack_output = self.devmgr(Encoder, "./actpack").position * self._direction
         actpack_pos = self._transmission.get(actpack_output)
-        diff = actpack_pos - self.position
+        diff = actpack_pos - self.angle
         self._actpack_offset = diff
         self._log.info(f"SET Actpack offset: {self._actpack_offset:.3f} rad")
 
@@ -170,7 +213,7 @@ class OSLv2Joint(OSLDevice, Joint):
         return self.devmgr(Actuator, device_path="./actpack").mode
 
     @mode.setter
-    def mode(self, controlmode: ActpackMode):
+    def mode(self, controlmode: ActpackMode | str):
         """Set joint control mode
 
         Args:
@@ -179,7 +222,9 @@ class OSLv2Joint(OSLDevice, Joint):
         Raises:
             KeyError: If the control mode is not supported by the driver
         """
-        self._log.info(f"Setting joint {self.name} mode to {controlmode}")
+        if isinstance(controlmode, str):
+            controlmode = ActpackMode.from_string(controlmode)
+        self._log.debug(f"SET mode to {controlmode.__name__}")
         self.devmgr(Actuator, device_path="./actpack").mode = controlmode
 
     @property
@@ -187,43 +232,26 @@ class OSLv2Joint(OSLDevice, Joint):
         return self.devmgr(Actuator, device_path="./actpack").gains
 
     @gains.setter
-    def gains(self, gains: Gains):
+    def gains(self, gains: JointGains | Gains):
+        if isinstance(gains, dict):
+            gains = Gains(**gains)
+        gains.applyTransmission(self._transmission.set(1))
         self.devmgr(Actuator, device_path="./actpack").gains = gains
 
     @property
-    def impedance(self) -> Gains:
-        # TODO: Return motor impedence recaulcated for joint impedence (gear ratio)
-        pass
-
-    @impedance.setter
-    def impedance(self, gains: Gains):
-        """Set joint impedance gains
-
-        Args:
-            gains (Gains): Joint impedance gains K and B
-
-        Raises:
-            RuntimeError: If the control mode does not support impedance control
-        """
-        self.devmgr(Actuator, "./actpack").gains = Gains(
-            K=(gains.K / (self._transmission.set(1) ** 2)),
-            B=(gains.B / (self._transmission.set(1) ** 2)),
-        )
-
-    @property
     @Units.to_defaults("position")
-    def position(self) -> float:
-        """Joint position in radians
+    def angle(self) -> float:
+        """Joint angle in radians
 
         Returns:
-            float: Joint position in radians
+            float: Joint angle in radians
 
         """
         return self.devmgr(Encoder, device_path="./encoder").position
 
-    @position.setter
-    def position(self, value: float):
-        """Set joint position command in radians
+    @angle.setter
+    def angle(self, value: float):
+        """Set joint angle command in radians
 
         This accounts for any offset between the actpack zero and the joint zero.
         The actpack_offset is in the gear context of the joint. This means that

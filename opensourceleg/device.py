@@ -1,8 +1,11 @@
 from types import TracebackType
-from typing import Any, Final, TypeVar, Union
+from typing import Any, Final, Self, TypedDict, TypeVar, Union
 
+import traceback
 from abc import ABC, abstractmethod
+from collections.abc import KeysView
 from contextlib import ExitStack
+from dataclasses import dataclass
 from functools import wraps
 from logging import Logger
 from pathlib import PurePosixPath
@@ -23,6 +26,13 @@ class Interface(ABC):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
+
+    class State(TypedDict):
+        pass
+
+    @abstractmethod
+    def apply_state(self, state: "Interface.State") -> None:
+        pass
 
 
 DeviceInterface = TypeVar("DeviceInterface", bound="Interface")
@@ -214,6 +224,10 @@ class DeviceManager:
         DeviceManager._clock.dt = 1 / value
 
     @property
+    def validPaths(self) -> KeysView[DevicePath]:
+        return DeviceManager._device_tree.keys()
+
+    @property
     def clock(self) -> SoftRealtimeLoop:
         return DeviceManager._clock
 
@@ -270,7 +284,7 @@ class DeviceManager:
         res: list["OSLDevice"] = []
         for key in cls._device_tree.keys():
             if key.match(path):
-                print(f"Matched {key} to {path}")
+                cls._log.debug(f"Matched {key} to {path}")
                 res.append(cls._device_tree[key])
         return res
 
@@ -327,6 +341,7 @@ class OSLDevice(ABC):
         name: str = "OSLDevice",
         basepath: Union[DevicePath, str] = DeviceManager.ROOT,
         units: UnitsDefinition = DEFAULT_UNITS,
+        log_level: str | int | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -338,6 +353,9 @@ class OSLDevice(ABC):
         self._init_interfaces()
         self._timer: OSLTimer = OSLTimer(self._name, logger=None)
 
+        if log_level is not None:
+            self._log.setLevel(log_level)
+
     def __enter__(self):
         self.start()
         return self
@@ -348,7 +366,9 @@ class OSLDevice(ABC):
             self.stop()
             return (True, None, None)
         elif exc_type is not None:
+            self._log.error(f" Exception in {self} with {exc_type}, {exc_value}")
             print(f"Exiting {self} with {exc_type}, {exc_value}")
+            traceback.print_tb(exc_traceback)
         self.stop()
         return (True, None, None)
 

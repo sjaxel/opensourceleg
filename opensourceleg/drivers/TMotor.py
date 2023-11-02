@@ -138,6 +138,9 @@ class TMotorActpack(Actpack, Actuator, Encoder):
     def _update(self):
         self._driver.update()
 
+    def apply_state(self, state: Actpack.State) -> None:
+        raise NotImplementedError(f"apply_state not implemented for {self.__class__}")
+
     @property
     def encoder_output(self) -> int:
         raise NotImplementedError("TMotor does not report raw encoder output")

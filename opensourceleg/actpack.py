@@ -1,4 +1,4 @@
-from typing import TypeVar
+from typing import Self, TypeVar
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -39,21 +39,19 @@ class Gains:
             ]
         )
 
-    def applyTransmission(self, gear_ratio: float) -> "Gains":
+    def applyTransmission(self, gear_ratio: float) -> None:
         """
         Apply a transmission to the gains
 
         Args:
             gear_ratio (float): The gear ratio to apply
         """
-        return Gains(
-            kp=self.kp,
-            ki=self.ki,
-            kd=self.kd,
-            K=self.K / (gear_ratio**2),
-            B=self.B / (gear_ratio**2),
-            ff=self.ff,
-        )
+        self.kp *= gear_ratio
+        self.ki *= gear_ratio
+        self.kd *= gear_ratio
+        self.K /= gear_ratio**2
+        self.B /= gear_ratio**2
+        self.ff *= gear_ratio
 
 
 # class ControlMode(Enum):
@@ -156,6 +154,13 @@ class ActpackMode(ABC):
     @abstractmethod
     def _exit(self):
         pass
+
+    @classmethod
+    def from_string(cls, mode: str) -> Self:
+        for m in cls.__subclasses__():
+            if m.__name__ == mode:
+                return m
+        raise KeyError(f"Mode {mode} not found")
 
 
 class IdleMode(ActpackMode):
@@ -371,4 +376,6 @@ class Actpack(OSLDevice, Actuator):
 
 
 if __name__ == "__main__":
-    pass
+    modestr = "IdleMode"
+    mode = ActpackMode.from_string(modestr)
+    print(mode)
