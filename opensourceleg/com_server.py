@@ -67,7 +67,7 @@ class ComServerRx(Thread):
 
             while True:
                 try:
-                    data = self.conn.recv(1024)
+                    data = self.conn.recv(4096)
                     if not data:
                         self.sock_close_evt.set()
                         print(f"[SERVER_RX] [Sock] Socket closed")

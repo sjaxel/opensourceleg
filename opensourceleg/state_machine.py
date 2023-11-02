@@ -88,16 +88,16 @@ class OSLState(NestedState, ABC):
         return self._config["device_states"]
 
     def apply_device_states(self) -> None:
+
         try:
             for path, device_state in self.device_states.items():
                 device = self._devmgr(Joint, path)
                 self._log.debug(f"Applying {device_state} to {device}")
                 device.apply_state(device_state)
-        except AttributeError as e:
-            self._log.error(f"Failed to apply device states to device at path {path}")
-            raise e
+        except KeyError:
+            self._log.info(f"State {self.name} has no device states to apply")
         except Exception as e:
-            self._log.error(f"Failed to apply device states to device at path {path}")
+            self._log.error(f"Error applying device state of {self.name} for {path}")
             raise e
 
     @abstractmethod
@@ -110,13 +110,18 @@ class OSLState(NestedState, ABC):
 
 
 class ParentOSLState(OSLState):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, devmgr: DeviceManager, *args, **kwargs) -> None:
+        super().__init__(devmgr, *args, **kwargs)
 
         self.init_substates()
 
         for substate in self.SUBSTATES:
-            self.add_substate(substate(args[0], args[1], parent_name=self.name))
+            self.add_substate(substate(devmgr, self.config, parent_name=self.name))
+
+    def _init_settings_storage(self, root_config: OSLConfig) -> None:
+        print(f"Initializing settings storage for ParentOSLState {self.name}")
+        self._config = StatesConfig({"states": {}})
+        root_config["states"][self.name] = self._config
 
     def init_transitions(self) -> list[dict]:
         """Initializes the transitions for all substates of a state.

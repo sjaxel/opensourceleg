@@ -1,3 +1,4 @@
+import traceback
 from queue import Empty
 
 from opensourceleg.com_protocol import OSLMsg
@@ -6,8 +7,12 @@ from opensourceleg.device import DeviceManager
 
 
 class MsgServer:
-    def __init__(self, devmgr: DeviceManager, comsrv: ComServer) -> None:
+    def __init__(
+        self, devmgr: DeviceManager, comsrv: ComServer, log_level=None
+    ) -> None:
         self._log = DeviceManager.getLogger("MsgServer")
+        if log_level is not None:
+            self._log.setLevel(log_level)
         self._devmgr = devmgr
         self._comsrv = comsrv
 
@@ -26,6 +31,8 @@ class MsgServer:
                     self._process_get(msg)
                 elif msg.type == "CALL":
                     self._process_call(msg)
+                elif msg.type == "SET":
+                    self._process_set(msg)
                 else:
                     unhandles_msgs.append(msg)
                     self._log.warning(
@@ -40,6 +47,7 @@ class MsgServer:
                 msg.type = "NACK"
                 msg.data = {"error": f"{e.__class__.__name__}: {e}"}
                 self._log.warning(f"Exception occured during message processing: {e}")
+                traceback.print_exc()
                 self._comsrv.send(msg)
         return unhandles_msgs
 
@@ -86,13 +94,38 @@ class MsgServer:
         }
         """
         for path in msg.data.keys():
+            self._log.info(f"CALL data: {msg.data}")
             device = self._devmgr.get(path)
             for method in msg.data[path]:
+                self._log.info(f"Method {method}")
                 args = msg.data[path][method]["args"]
                 kwargs = msg.data[path][method]["kwargs"]
                 self._log.info(f"CALL {path}.{method}({args}, {kwargs})")
                 res = getattr(device, method)(*args, **kwargs)
                 msg.data[path][method]["res"] = res
+
+    def _process_set(self, msg: OSLMsg) -> None:
+        """
+        msg = {
+            "uid": n
+            "type": "SET"
+            "data": {
+                "path1": {
+                    "attr1": res1,
+                    "attr2": res2
+                },
+                "path2": {
+                    "attr1": res1,
+                    "attr2": res2
+                }
+            }
+        }
+        """
+        for path in msg.data.keys():
+            device = self._devmgr.get(path)
+            for attr in msg.data[path]:
+                self._log.info(f"SET {path}.{attr} = {msg.data[path][attr]}")
+                setattr(device, attr, msg.data[path][attr])
 
 
 if __name__ == "__main__":

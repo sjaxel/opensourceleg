@@ -6,6 +6,7 @@ from opensourceleg.device import DeviceManager, Interface, OSLDevice
 from opensourceleg.joints import Joint
 from opensourceleg.loadcell import Loadcell
 from opensourceleg.state_machine import OSLMachine, OSLState
+from opensourceleg.utilities import nested_dict_update
 
 
 class Leg(Interface):
@@ -174,14 +175,14 @@ class OSL(OSLDevice, Leg, Loadcell, DeviceConfig):
         return self._config
 
     @config.setter
-    def config(self, config: OSLConfig) -> None:
+    def config(self, config: dict) -> None:
         """
         Sets the configuration of the OSL object.
 
         Args:
-            config (OSLConfig): The configuration to set.
+            config (dict): A nested dict of the configuration to set.
         """
-        self._config.update(**config)
+        nested_dict_update(self._config, config)
 
     @property
     def ankle(self) -> Joint:

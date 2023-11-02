@@ -1,3 +1,5 @@
+from typing import Any, Callable
+
 import csv
 import glob
 import signal
@@ -413,3 +415,39 @@ def value_to_bit_count(
         new_value = value
 
     return int(new_value / (max_value - min_value) * (2**bit_length - 1))
+
+
+def nested_dict_update(d: dict, u: dict) -> dict:
+    """Updated values in a nested dictionary
+
+    Does not add new keys or remove old keys.
+    Preserves the structure of the original dictionary.
+
+    Args:
+        d (dict): Original dictionary
+        u (dict): Update dictionary
+
+    Returns:
+        dict: A reference to the original dictionary with updated values
+    """
+
+    def get_operation(d: dict, k: str, v: Any) -> Callable[[], None]:
+        def operation():
+            d[k] = v
+
+        return operation
+
+    def nested_update(d: dict, u: dict) -> list[Callable[[], None]]:
+        operations = []
+        for k, v in u.items():
+            if k not in d.keys():
+                raise KeyError(f"Key {k} not in dictionary")
+            elif isinstance(v, dict):
+                operations.extend(nested_update(d.get(k), v))
+            else:
+                operations.append(get_operation(d, k, v))
+        return operations
+
+    for op in nested_update(d, u):
+        op()
+    return d

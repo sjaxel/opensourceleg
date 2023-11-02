@@ -1,6 +1,7 @@
 from types import FunctionType
 from typing import Any
 
+import json
 import signal
 import socket
 from pprint import pprint
@@ -54,13 +55,14 @@ class RemoteOSL:
         if not self._connected:
             raise ConnectionError("Client is not connected to server")
         buffer = bytearray()
-        buffer += self._socket.recv(1024)
+        buffer += self._socket.recv(2048)
         messages, buffer = SocketIOFrame.decode(buffer)
         if len(messages) != 1:
             raise ValueError(f"Expected 1 message, got {len(messages)}")
         if messages[0].type != "ACK":
-            print(f"[Client] NACK: {messages[0].data}")
+            print(f"[Client] NACK: {messages[0].data['error']}")
             raise ValueError(f"Expected ACK message, got {messages[0].type}")
+        print(f"[RemoteOSL] -> ACK")
         return messages[0]
 
     @property
@@ -101,7 +103,7 @@ class DeviceProxy:
         if attr in ["_path", "_remote_osl", "_proxyclass"]:
             super().__setattr__(attr, value)
             return
-        msg = OSLMsg(0, "CALL", {self._path: {attr: {"args": [value], "kwargs": {}}}})
+        msg = OSLMsg(0, "SET", {self._path: {attr: value}})
         self._remote_osl._send(msg)
         return self._remote_osl._recv()
 
@@ -124,62 +126,53 @@ def signal_handler(signal, frame):
 if __name__ == "__main__":
     print("[MAIN] Started")
 
-    print(dir(OSL))
+    signal.signal(signal.SIGINT, signal_handler)
 
-    # leg_proxy: OSL = DeviceProxy(OSL, "/leg", "dummy")
-
-    # leg_proxy.set_device_state("usercontrol", angle=0)
-
-    # signal.signal(signal.SIGINT, signal_handler)
-
-    # with RemoteOSL() as osl:
-    #     leg_proxy: OSL = DeviceProxy(OSL, "/leg", osl)
-    #     ankle_proxy: Joint = DeviceProxy(Joint, "/leg/ankle", osl)
-    #     knee_proxy: Joint = DeviceProxy(Joint, "/leg/knee", osl)
-
-    #     if leg_proxy.is_homed:
-    #         print("[MAIN] Leg is already homed")
-    #     elif leg_proxy.state == "idle":
-    #         print("[MAIN] Homing leg")
-    #         leg_proxy.trigger = "start_home"
-    #         while leg_proxy.state == "homing":
-    #             # print("\033[A\033[A")
-    #             # print("\033[A\033[A")
-    #             print(f"Knee angle: {knee_proxy.angle:.3f}")
-    #             print(f"Ankle angle: {ankle_proxy.angle:.3f}")
-    #         print("[MAIN] Leg is homed")
-    #     if leg_proxy.state == "idle":
-    #         leg_proxy.trigger = "usercontrol"
-
-    #     current = leg_proxy.config
-
-    #     pprint(current)
-
-    #     exit(0)
-    #     angle_ref = 0.0
-    #     path = ""
-    #     while True:
-    #         ankle_angle = ankle_proxy.angle
-    #         knee_angle = knee_proxy.angle
-    #         print(
-    #             f"Ankle angle: {ankle_angle:.3f}rad, Knee angle: {knee_angle:.3f}rad"
-    #         )
-    #         path_input = input(f"Device: {path}")
-    #         if path_input != "":
-    #             path = path_input
-
-    #         try:
-    #             res = {}
-    #             for pair in input("Data: ").split(","):
-    #                 pair = pair.strip()
-    #                 key, value = pair.split("=")
-    #                 value = float(value)
-    #                 res[key] = value
-
-    #             leg_proxy.set_device_state(path, **res)
-    #         except ValueError as e:
-    #             print(f"Value error: {e}")
-    #         except KeyError:
-    #             pass
-    #         except Exception as e:
-    #             break
+    with RemoteOSL() as osl:
+        device: OSL = DeviceProxy(OSL, "/leg", osl)
+        while True:
+            try:
+                cmd = input(f"${device._path}: ")
+                (cmd, *args) = cmd.split(" ")
+                if cmd == "exit":
+                    exit(0)
+                elif cmd == "set":
+                    (method, value) = args
+                    setattr(device, method, value)
+                elif cmd == "get":
+                    attr = args[0]
+                    print(getattr(device, attr))
+                elif cmd == "call":
+                    (method, *args) = args
+                    # TODO Parse and handle args/kwargs
+                    leg_proxy.call(method)
+                elif cmd == "device":
+                    device = DeviceProxy(OSLDevice, args[0], osl)
+                elif cmd == "get_config":
+                    if len(args) == 0:
+                        args = ["config.json"]
+                    with open(args[0], "w") as f:
+                        json.dump(device.config, f, indent=4)
+                        print(f"[Client] Wrote config to {f.name}")
+                elif cmd == "set_config":
+                    if len(args) == 0:
+                        args = ["config.json"]
+                    with open(args[0]) as f:
+                        device.config = json.load(f)
+                elif cmd == "help":
+                    print(
+                        """
+                    set - Set device state
+                    get - Get device state
+                    call - Call device method
+                    list - List devices
+                    help - Print this help
+                    exit - Exit
+                    """
+                    )
+                else:
+                    print("Unknown command")
+            except ValueError:
+                continue
+            except Exception as e:
+                raise e

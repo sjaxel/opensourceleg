@@ -143,7 +143,7 @@ if __name__ == "__main__":
     devmgr = DeviceManager()
     devmgr.frequency = 100
 
-    msgserver = MsgServer(devmgr, comserver)
+    msgserver = MsgServer(devmgr, comserver, log_level="DEBUG")
 
     ## Init the hardware devices
 
@@ -178,6 +178,7 @@ if __name__ == "__main__":
             yaw=lc_yaw_correction,
             loadcell_zero=lc_zero_offset,
         ),
+        log_level="ERROR",
     )
 
     # Init joints
@@ -236,7 +237,7 @@ if __name__ == "__main__":
     """
 
     with devmgr, msgserver:
-        osl.home()
+        # osl.home()
         last_report = 0
         for tick, time in devmgr.clock:
             if time > MAINLOOP_TIMEOUT:

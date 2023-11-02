@@ -25,22 +25,15 @@ class LevelMode(ParentOSLState):
 
     def init_transitions(self) -> list[dict]:
         ## Mode-wide transitions (i.e. transitions that are valid in all substates)
-
-        state_transitions = [
-            {
-                "trigger": "new_data",
-                "source": "level",
-                "dest": "init_idle",
-                "conditions": self.timeout(10),
-            },
+        mode_transitions = [
             {
                 "trigger": "stopped",
                 "source": "level",
                 "dest": "init_off",
             },
         ]
-
-        return super().init_transitions().append(state_transitions)
+        substate_transition = super().init_transitions()
+        return mode_transitions + substate_transition
 
     def init_state_settings(self) -> None:
         pass
