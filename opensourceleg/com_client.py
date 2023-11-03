@@ -71,38 +71,24 @@ class RemoteOSL:
 
 
 class DeviceProxy:
+    _remote_osl: RemoteOSL
+    _path: str
+    _proxyclass: type[OSLDevice]
+
     def __init__(self, proxyclass: type[OSLDevice], path: str, remote_osl: RemoteOSL):
-        self._path = path
-        self._remote_osl = remote_osl
-        self._proxyclass = proxyclass
+        self.__dict__["_path"] = path
+        self.__dict__["_remote_osl"] = remote_osl
+        self.__dict__["_proxyclass"] = proxyclass
+
+    def __getattribute__(self, attr: str) -> Any:
+        return super().__getattribute__(attr)
 
     def __getattr__(self, attr: str) -> Any:
-        def call_function(*args, **kwargs):
-            msg = OSLMsg(
-                0, "CALL", {self._path: {attr: {"args": args, "kwargs": kwargs}}}
-            )
-            self._remote_osl._send(msg)
-            return self._remote_osl._recv()
-
-        try:
-            if isinstance(self._proxyclass.__dict__[attr], FunctionType):
-                return call_function
-            elif isinstance(self._proxyclass.__dict__[attr], property):
-                msg = OSLMsg(0, "GET", {self._path: {attr: None}})
-                self._remote_osl._send(msg)
-                res = self._remote_osl._recv().data[self._path][attr]
-                return res
-        except KeyError:
-            print(f"Unknown attribute {attr}, trying GET")
-            msg = OSLMsg(0, "GET", {self._path: {attr: None}})
-            self._remote_osl._send(msg)
-            res = self._remote_osl._recv().data[self._path][attr]
-            return res
+        msg = OSLMsg(0, "GET", {self._path: {attr: None}})
+        self._remote_osl._send(msg)
+        return self._remote_osl._recv().data[self._path][attr]
 
     def __setattr__(self, attr: str, value):
-        if attr in ["_path", "_remote_osl", "_proxyclass"]:
-            super().__setattr__(attr, value)
-            return
         msg = OSLMsg(0, "SET", {self._path: {attr: value}})
         self._remote_osl._send(msg)
         return self._remote_osl._recv()
@@ -145,8 +131,8 @@ if __name__ == "__main__":
                 elif cmd == "call":
                     (method, *args) = args
                     # TODO Parse and handle args/kwargs
-                    leg_proxy.call(method)
-                elif cmd == "device":
+                    device.call(method)
+                elif cmd == "set_device":
                     device = DeviceProxy(OSLDevice, args[0], osl)
                 elif cmd == "get_config":
                     if len(args) == 0:

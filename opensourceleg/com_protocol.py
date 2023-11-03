@@ -4,11 +4,15 @@ import json
 from abc import ABCMeta
 from dataclasses import dataclass
 
+from opensourceleg.actpack import Gains
+
 
 class OSLJSONEncoder(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, ABCMeta):
             return o.__name__
+        elif isinstance(o, Gains):
+            return o.__dict__
         return json.JSONEncoder.default(self, o)
 
 

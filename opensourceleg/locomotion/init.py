@@ -1,9 +1,13 @@
-from typing import Self
-
-from enum import Enum, auto
+from numpy import deg2rad
 
 from opensourceleg.actpack import IdleMode
-from opensourceleg.joints import Joint, SpeedMode, VelocityGains
+from opensourceleg.joints import (
+    ImpedenceGains,
+    ImpedenceMode,
+    Joint,
+    SpeedMode,
+    VelocityGains,
+)
 from opensourceleg.state_machine import OSLState, ParentOSLState
 
 
@@ -14,6 +18,7 @@ class InitMode(ParentOSLState):
         self.SUBSTATES = [
             InitMode.Off,
             InitMode.Idle,
+            InitMode.Stiff,
             InitMode.Homing,
         ]
         self.initial = "off"
@@ -73,6 +78,35 @@ class InitMode(ParentOSLState):
         def init_state_settings(self) -> None:
             self.device_states["/leg/knee"] = Joint.State(mode=IdleMode)
             self.device_states["/leg/ankle"] = Joint.State(mode=IdleMode)
+
+    class Stiff(OSLState):
+        NAME = "stiff"
+
+        def init_transitions(self) -> list[dict]:
+            state_transitions = [
+                {
+                    "trigger": "stiff",
+                    "source": "*",
+                    "dest": "init_stiff",
+                }
+            ]
+            return state_transitions
+
+        def init_state_settings(self) -> None:
+            IMPEDENCE_K = 50
+            IMPEDENCE_B = 100
+            THETA = 0
+
+            self.device_states["/leg/knee"] = Joint.State(
+                mode=ImpedenceMode,
+                gains=ImpedenceGains(K=IMPEDENCE_K, B=IMPEDENCE_B),
+                angle=deg2rad(THETA),
+            )
+            self.device_states["/leg/ankle"] = Joint.State(
+                mode=ImpedenceMode,
+                gains=ImpedenceGains(K=IMPEDENCE_K, B=IMPEDENCE_B),
+                angle=deg2rad(THETA),
+            )
 
     class Homing(OSLState):
         NAME = "homing"

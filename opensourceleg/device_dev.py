@@ -141,7 +141,7 @@ if __name__ == "__main__":
     comserver = ComServer()
 
     devmgr = DeviceManager()
-    devmgr.frequency = 100
+    devmgr.frequency = 80
 
     msgserver = MsgServer(devmgr, comserver, log_level="DEBUG")
 
@@ -178,7 +178,7 @@ if __name__ == "__main__":
             yaw=lc_yaw_correction,
             loadcell_zero=lc_zero_offset,
         ),
-        log_level="ERROR",
+        log_level="INFO",
     )
 
     # Init joints
