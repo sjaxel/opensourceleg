@@ -4,7 +4,8 @@ import json
 from abc import ABCMeta
 from dataclasses import dataclass
 
-from opensourceleg.actpack import Gains
+class Gains:
+    pass
 
 
 class OSLJSONEncoder(json.JSONEncoder):

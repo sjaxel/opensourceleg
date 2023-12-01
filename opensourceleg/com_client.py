@@ -7,12 +7,9 @@ import socket
 from pprint import pprint
 from time import perf_counter, sleep, time
 
-from opensourceleg.com_protocol import OSLMsg, SocketIOFrame
-from opensourceleg.device import OSLDevice
-from opensourceleg.joints import OSLv2Joint as Joint
-from opensourceleg.osl import OSL
+from com_protocol import OSLMsg, SocketIOFrame
 
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "nb-rpi-100"
 DEFAULT_PORT = 65431
 
 
@@ -78,12 +75,10 @@ class RemoteOSL:
 class DeviceProxy:
     _remote_osl: RemoteOSL
     _path: str
-    _proxyclass: type[OSLDevice]
 
-    def __init__(self, proxyclass: type[OSLDevice], path: str, remote_osl: RemoteOSL):
+    def __init__(self, path: str, remote_osl: RemoteOSL):
         self.__dict__["_path"] = path
         self.__dict__["_remote_osl"] = remote_osl
-        self.__dict__["_proxyclass"] = proxyclass
 
     def __getattribute__(self, attr: str) -> Any:
         return super().__getattribute__(attr)
@@ -120,7 +115,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
 
     with RemoteOSL() as osl:
-        device: OSL = DeviceProxy(OSL, "/leg", osl)
+        device = DeviceProxy("/leg", osl)
 
         while True:
             try:
