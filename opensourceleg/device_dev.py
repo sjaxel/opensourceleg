@@ -208,6 +208,8 @@ def signal_handler(sig, frame):
 
 if __name__ == "__main__":
 
+    HOSTNAME = "nb-rpi-100"
+
     signal.signal(signal.SIGTERM, signal_handler)
     ## Init DeviceManager, ComServer and MsgServer
 

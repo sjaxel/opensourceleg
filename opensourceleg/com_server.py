@@ -10,7 +10,7 @@ QueueRegistry = list[tuple[set[str], Queue[OSLMsg], str]]
 
 
 class ComServer(Thread):
-    HOST: str = "127.0.0.1"
+    HOST: str = ""
     PORT: int = 65431
 
     def __init__(self):
