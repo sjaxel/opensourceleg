@@ -1,5 +1,10 @@
 from typing import Any, ClassVar
 
+import signal
+import traceback
+from queue import Empty
+from threading import Event, Thread
+
 from numpy import deg2rad
 
 from opensourceleg.actpack import (
@@ -11,7 +16,7 @@ from opensourceleg.actpack import (
     ImpedenceMode,
     SpeedMode,
 )
-from opensourceleg.com_msgserver import MsgServer
+from opensourceleg.com_msgserver import MsgServer, RPCMsgServer
 from opensourceleg.com_server import ComServer
 from opensourceleg.device import DeviceManager
 from opensourceleg.drivers.TMotor import TMotorActpack
@@ -134,16 +139,82 @@ class AnnoyedState(OSLState):
             return False
 
 
+class DevMgrThread(Thread):
+    def __init__(self, devmgr: DeviceManager, comsrv: ComServer):
+        super().__init__()
+        self._devmgr = devmgr
+        self._msgsrv: RPCMsgServer = RPCMsgServer(
+            devmgr, comsrv, subscription=("GET", "SET", "CALL")
+        )
+        self._stop_event = Event()
+        self._stopped_event = Event()
+        self._exit_event = Event()
+        self._start_event = Event()
+        self._started_event = Event()
+
+    def run(self):
+        while True:
+            if self._start_event.wait(timeout=0.1):
+                self._start_event.clear()
+                ## We got the start event, enter the devmgr context manager
+                try:
+                    with self._devmgr as devmgr, self._msgsrv as msgsrv:
+                        self._stopped_event.clear()
+                        self._started_event.set()
+                        for time, tick in devmgr.clock:
+                            if self._stop_event.is_set():
+                                break
+                            devmgr.update()
+                            msgsrv.process()
+                except Exception as e:
+                    traceback.print_exc()
+                    self._stop_event.set()
+                    self._exit_event.set()
+                    self._stopped_event.set()
+                    self._started_event.clear()
+
+                self._stop_event.clear()
+                self._stopped_event.set()
+                self._started_event.clear()
+            else:
+                # Timeout, check if we should exit for some reason.
+                if self._exit_event.is_set():
+                    break
+
+    def __enter__(self):
+        self.start()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.exit()
+
+    def start_devmgr(self, timeout=1) -> bool:
+        self._start_event.set()
+        return self._started_event.wait(timeout)
+
+    def stop_devmgr(self, timeout=1) -> bool:
+        self._stop_event.set()
+        return self._stopped_event.wait(timeout)
+
+    def exit(self, timeout: float = 2):
+        self._exit_event.set()
+        self._stop_event.set()
+        self.join(timeout)
+
+
+def signal_handler(sig, frame):
+    print(f"SIGINT received")
+    raise KeyboardInterrupt
+
+
 if __name__ == "__main__":
 
+    signal.signal(signal.SIGTERM, signal_handler)
     ## Init DeviceManager, ComServer and MsgServer
 
     comserver = ComServer()
 
     devmgr = DeviceManager()
     devmgr.frequency = 80
-
-    msgserver = MsgServer(devmgr, comserver, log_level="DEBUG")
 
     ## Init the hardware devices
 
@@ -165,7 +236,7 @@ if __name__ == "__main__":
 
     sa_offset = [-10, -9, 33, 21, 9, 11]
     lc_yaw_correction = deg2rad(-30)
-    lc_zero_offset = [0.710, 15.164, 32.149, 1.014, 0.376, 0.025]
+    lc_zero_offset = [-11.7, 5.6, 145.7, -1, -0.15, -0.6]
 
     loadcell = FlexSEAStrainAmp(
         name="loadcell",
@@ -217,44 +288,39 @@ if __name__ == "__main__":
     # Load the states into the OSL device
     osl.initStateMachine([InitMode, LevelMode])
 
-    osl.config["user"]["height"] = 190
-    osl.config["user"]["weight"] = 20
+    msgsrv = MsgServer(devmgr, comserver, subscription=("CMD"))
+    t_osl: DevMgrThread = DevMgrThread(devmgr, comserver)
 
-    def print_osl_state():
-        osl._log.info(f"OSL State: {osl.state}")
-        osl._log.info(f"Leg load fz: {osl.fz:.2f} N")
-        osl._log.info(f"Knee angle: {osl.knee.angle:.2f} rad")
-        osl._log.info(f"Ankle angle: {osl.ankle.angle:.2f} rad")
-
-    MAINLOOP_TIMEOUT = 200 * 20  # sec
-    STATE_REPORT = 1  # sec
-    """Main program loop
-
-    Starts the DeviceManager and MsgServer and runs the inner clock loop
-    at the configured frequency
-
-
-    """
-
-    with devmgr, msgserver:
-        # osl.home()
-        last_report = 0
-        for tick, time in devmgr.clock:
-            if time > MAINLOOP_TIMEOUT:
-                devmgr._log.info(f"Timeout: {time}")
+    with comserver, msgsrv, t_osl:
+        while True:
+            try:
+                msg = msgsrv.get(timeout=1)
+                match msg.data:
+                    case "START":
+                        if t_osl.start_devmgr():
+                            msgsrv.ack(msg)
+                        else:
+                            err = RuntimeError("DevMgrThread did not respond to start")
+                            msgsrv.nack(msg, err)
+                    case "STOP":
+                        if t_osl.stop_devmgr():
+                            msgsrv.ack(msg)
+                        else:
+                            err = RuntimeError("DevMgrThread did not respond to stop")
+                            msgsrv.nack(msg, err)
+                    case "EXIT":
+                        msgsrv.ack(msg)
+                        break
+                    case _:
+                        err = ValueError("Unknown command")
+                        msgsrv.nack(msg, err)
+                        continue
+            except Empty:
+                continue
+            except KeyboardInterrupt:
+                print("Keyboard interrupt")
                 break
-            # Call the update function of all devices
-            devmgr.update()
-
-            # Print the current state of the OSL device
-            if time - last_report > STATE_REPORT:
-                last_report = time
-                # print_osl_state()
-
-            # Process all messages recieved over ComServer interface
-            if unhandled_msg := msgserver.process():
-                devmgr._log.warning(f"Unhandled messages: {unhandled_msg}")
-                ##Process manually
-
-        # Print colleted timer data
-        devmgr._log.info(devmgr._timer)
+            except Exception as e:
+                traceback.print_exc()
+                break
+    print("Exited with block")

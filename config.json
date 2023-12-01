@@ -1,0 +1,152 @@
+{
+    "user": {
+        "height": 190,
+        "weight": 78
+    },
+    "states": {
+        "init": {
+            "states": {
+                "off": {
+                    "device_states": {}
+                },
+                "idle": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "IdleMode"
+                        },
+                        "/leg/ankle": {
+                            "mode": "IdleMode"
+                        }
+                    }
+                },
+                "stiff": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 50,
+                                "B": 100
+                            },
+                            "angle": 0.0
+                        },
+                        "/leg/ankle": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 50,
+                                "B": 100
+                            },
+                            "angle": 0.0
+                        }
+                    }
+                },
+                "homing": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "SpeedMode",
+                            "gains": {
+                                "kd": 10
+                            }
+                        },
+                        "/leg/ankle": {
+                            "mode": "SpeedMode",
+                            "gains": {
+                                "kd": 10
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "level": {
+            "states": {
+                "estance": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 99.372,
+                                "B": 3.18
+                            },
+                            "angle": 0.08726646259971647
+                        },
+                        "/leg/ankle": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 19.874,
+                                "B": 0
+                            },
+                            "angle": -0.03490658503988659
+                        }
+                    },
+                    "load_to_level_lstance": 0.25,
+                    "ankle_theta_to_level_lstance": 0.10471975511965978
+                },
+                "lstance": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 99.372,
+                                "B": 1.272
+                            },
+                            "angle": 0.13962634015954636
+                        },
+                        "/leg/ankle": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 79.498,
+                                "B": 0.063
+                            },
+                            "angle": -0.3490658503988659
+                        }
+                    },
+                    "load_to_level_eswing": 0.15
+                },
+                "eswing": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 39.749,
+                                "B": 0.063
+                            },
+                            "angle": 1.0471975511965976
+                        },
+                        "/leg/ankle": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 7.949,
+                                "B": 0.0
+                            },
+                            "angle": 0.4363323129985824
+                        }
+                    },
+                    "knee_theta_to_level_lswing": 0.8726646259971648,
+                    "knee_dtheta_to_level_lswing": 0.05235987755982989
+                },
+                "lswing": {
+                    "device_states": {
+                        "/leg/knee": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 15.899,
+                                "B": 3.816
+                            },
+                            "angle": 0.10471975511965978
+                        },
+                        "/leg/ankle": {
+                            "mode": "ImpedenceMode",
+                            "gains": {
+                                "K": 7.949,
+                                "B": 0.0
+                            },
+                            "angle": 0.2617993877991494
+                        }
+                    },
+                    "knee_theta_to_level_estance": 0.5235987755982988,
+                    "load_to_level_estance": 0.4
+                }
+            }
+        }
+    }
+}

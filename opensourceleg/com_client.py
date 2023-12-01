@@ -37,6 +37,7 @@ class RemoteOSL:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.send_command("STOP")
         self._socket.close()
         self._connected = False
         if isinstance(exc_value, KeyboardInterrupt):
@@ -64,6 +65,10 @@ class RemoteOSL:
             raise ValueError(f"Expected ACK message, got {messages[0].type}")
         print(f"[RemoteOSL] -> ACK")
         return messages[0]
+
+    def send_command(self, command: str):
+        self._send(OSLMsg(1, "CMD", command))
+        self._recv()
 
     @property
     def connected(self) -> bool:
@@ -116,49 +121,56 @@ if __name__ == "__main__":
 
     with RemoteOSL() as osl:
         device: OSL = DeviceProxy(OSL, "/leg", osl)
+
         while True:
             try:
                 cmd = input(f"${device._path}: ")
                 (cmd, *args) = cmd.split(" ")
-                if cmd == "exit":
-                    exit(0)
-                elif cmd == "set":
-                    (method, value) = args
-                    setattr(device, method, value)
-                elif cmd == "get":
-                    attr = args[0]
-                    print(getattr(device, attr))
-                elif cmd == "call":
-                    (method, *args) = args
-                    # TODO Parse and handle args/kwargs
-                    device.call(method)
-                elif cmd == "set_device":
-                    device = DeviceProxy(OSLDevice, args[0], osl)
-                elif cmd == "get_config":
-                    if len(args) == 0:
-                        args = ["config.json"]
-                    with open(args[0], "w") as f:
-                        json.dump(device.config, f, indent=4)
-                        print(f"[Client] Wrote config to {f.name}")
-                elif cmd == "set_config":
-                    if len(args) == 0:
-                        args = ["config.json"]
-                    with open(args[0]) as f:
-                        device.config = json.load(f)
-                elif cmd == "help":
-                    print(
-                        """
-                    set - Set device state
-                    get - Get device state
-                    call - Call device method
-                    list - List devices
-                    help - Print this help
-                    exit - Exit
-                    """
-                    )
-                else:
-                    print("Unknown command")
-            except ValueError:
+
+                match cmd:
+                    case "exit":
+                        exit(0)
+                    case "start":
+                        osl.send_command("START")
+                    case "set":
+                        (method, value) = args
+                        setattr(device, method, value)
+                    case "get":
+                        attr = args[0]
+                        print(getattr(device, attr))
+                    case "call":
+                        (method, *args) = args
+                        # TODO Parse and handle args/kwargs
+                        device.call(method)
+                    case "set_device":
+                        device = DeviceProxy(OSLDevice, args[0], osl)
+                    case "get_config":
+                        if len(args) == 0:
+                            args = ["config.json"]
+                        with open(args[0], "w") as f:
+                            json.dump(device.config, f, indent=4)
+                            print(f"[Client] Wrote config to {f.name}")
+                    case "set_config":
+                        if len(args) == 0:
+                            args = ["config.json"]
+                        with open(args[0]) as f:
+                            device.config = json.load(f)
+                    case "help":
+                        print(
+                            """
+                            start - Start the device
+                            set - Set an attribute
+                            get - Get an attribute
+                            call - Call a method
+                            set_device - Set the device proxy
+                            get_config - Get the device configuration
+                            set_config - Set the device configuration
+                            help - Print this help
+                            exit - Exit
+                            """
+                        )
+                    case _:
+                        print("Unknown command")
                 continue
             except Exception as e:
                 raise e

@@ -230,7 +230,7 @@ class FlexSEAStrainAmp(StrainAmp, Loadcell):
         if amplifier_input_offset is None:
             self._adc_input_offset = np.zeros(self.nCHANNELS)
         else:
-            self._adc_input_offset = amplifier_input_offset
+            self._adc_input_offset = np.array(amplifier_input_offset)
 
         self.output_data: np.ndarray = np.zeros(self.nCHANNELS)
         self.failed_reads = 0
@@ -373,15 +373,24 @@ if __name__ == "__main__":
     ]
 
     devmgr = DeviceManager()
-    devmgr.frequency = 100
+    devmgr.frequency = 50
 
     sa_offset = [-10, -9, 33, 21, 9, 11]
+    # sa_offset = [0, 0, 0, 0, 0, 0]
 
-    cal = LoadcellCalibration(loadcell_matrix=decoupling_matrix, yaw=np.deg2rad(-30))
+    # lc_zero_offset = [0.710, 15.164, 32.149, 1.014, 0.376, 0.025]
+    lc_zero_offset = [-11.7, 5.6, 145.7, -1, -0.15, -0.6]
+    # lc_zero_offset = [0, 0, 0, 0, 0, 0]
+
+    cal = LoadcellCalibration(
+        loadcell_matrix=decoupling_matrix,
+        yaw=np.deg2rad(-30),
+        loadcell_zero=lc_zero_offset,
+    )
     sa = FlexSEAStrainAmp(
         bus="/dev/i2c-1",
         I2C_addr=0x66,
-        amplifier_input_offset=sa_offset,
+        amplifier_input_offset=np.array(sa_offset),
         calibration=cal,
         log_level="DEBUG",
     )
@@ -391,5 +400,16 @@ if __name__ == "__main__":
         for tick in devmgr.clock:
             devmgr.update()
 
-            # print(f"Fx: {sa.fx:.5f} N Fy: {sa.fy:.2f} N Fz: {sa.fz:.2f} N")
-            # print(f"Mx: {sa.mx:.2f} Nm My: {sa.my:.2f} Nm Mz: {sa.mz:.2f} Nm")
+            # if n_sampled < 1000:
+            #     zero_data += [sa.fx, sa.fy, sa.fz, sa.mx, sa.my, sa.mz]
+            #     n_sampled += 1
+            # else:
+            #     zero_data = zero_data / n_sampled
+            #     cal.loadcell_zero = zero_data
+            #     #print(f"Zero offset: {zero_data}")
+            #     break
+
+            print(f"Fx: {sa.fx:.5f} N Fy: {sa.fy:.2f} N Fz: {sa.fz:.2f} N")
+            print(f"Mx: {sa.mx:.2f} Nm My: {sa.my:.2f} Nm Mz: {sa.mz:.2f} Nm")
+
+    print(f"Zero offset: {zero_data}")
