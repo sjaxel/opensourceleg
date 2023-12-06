@@ -16,12 +16,12 @@ from opensourceleg.actpack import (
     ImpedenceMode,
     SpeedMode,
 )
-from opensourceleg.com_msgserver import MsgServer, RPCMsgServer
-from opensourceleg.com_server import ComServer
+from opensourceleg.com.msgserver import MsgServer, RPCMsgServer
+from opensourceleg.com.server import ComServer
 from opensourceleg.device import DeviceManager
 from opensourceleg.drivers.TMotor import TMotorActpack
-from opensourceleg.encoder import AS5048A_Encoder, Encoder
-from opensourceleg.joints import ImpedenceGains, Joint, OSLv2Joint, VelocityGains
+from opensourceleg.encoder import AS5048A_Encoder
+from opensourceleg.joints import OSLv2Joint
 from opensourceleg.loadcell import FlexSEAStrainAmp, Loadcell, LoadcellCalibration
 from opensourceleg.locomotion.init import InitMode
 from opensourceleg.locomotion.level import LevelMode
@@ -29,188 +29,75 @@ from opensourceleg.osl import OSL, Leg
 from opensourceleg.state_machine import OSLState
 
 
-class ZeroingState(OSLState):
-    NAME = "zeroing"
-
-    def init_state_settings(self) -> None:
-        self.device_states["/leg/knee"] = Joint.State(mode=IdleMode)
-        self.device_states["/leg/ankle"] = Joint.State(mode=IdleMode)
-
-        self.add_callback("enter", self._zero_actpack)
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {
-                "trigger": "new_data",
-                "source": self.name,
-                "dest": "idle",
-                "conditions": self.timeout(1),
-            },
-        ]
-        return state_transitions
-
-    def _zero_actpack(self) -> None:
-        self._devmgr(Encoder, "/leg/knee/actpack").set_zero()
-        self._devmgr(Encoder, "/leg/ankle/actpack").set_zero()
-
-
-class UserControlState(OSLState):
-    NAME = "usercontrol"
-
-    def init_state_settings(self) -> None:
-        self.device_states["/leg/knee"] = self.device_states[
-            "/leg/ankle"
-        ] = Joint.State(mode=ImpedenceMode, gains=ImpedenceGains(K=40, B=5), angle=0.0)
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {"trigger": "usercontrol", "source": "idle", "dest": self.NAME},
-            {
-                "trigger": "stopped",
-                "source": self.NAME,
-                "dest": "off",
-            },
-            {
-                "trigger": "new_data",
-                "source": self.NAME,
-                "dest": None,
-            },
-            {
-                "trigger": "device_state_update",
-                "source": self.NAME,
-                "dest": None,
-                "after": self.apply_device_states,
-            },
-        ]
-        return state_transitions
-
-
-class AnnoyedState(OSLState):
-    NAME = "annoyed"
-    TRIGGERED_ANGLE = 0.3
-    RELAXING_ANGLE = 0.01
-
-    def init_state_settings(self) -> None:
-        self.device_states["/leg/knee"] = Joint.State(
-            mode=ImpedenceMode, gains=ImpedenceGains(K=40, B=5), angle=0.0
-        )
-        self.device_states["/leg/ankle"] = Joint.State(
-            mode=ImpedenceMode, gains=ImpedenceGains(K=80, B=10), angle=0.0
-        )
-
-    def init_transitions(self) -> list[dict]:
-        state_transitions = [
-            {
-                "trigger": "new_data",
-                "source": "idle",
-                "dest": self.NAME,
-                "conditions": self._becomes_annoyed,
-            },
-            {
-                "trigger": "new_data",
-                "source": self.NAME,
-                "dest": "idle",
-                "conditions": self._relaxes,
-            },
-            {
-                "trigger": "new_data",
-                "source": self.NAME,
-                "dest": "idle",
-                "conditions": self.timeout(3),
-            },
-            {
-                "trigger": "stopped",
-                "source": self.NAME,
-                "dest": "off",
-            },
-        ]
-        return state_transitions
-
-    def _becomes_annoyed(self) -> bool:
-        if abs(self._devmgr(Joint, "/leg/ankle").angle) > self.TRIGGERED_ANGLE:
-            return True
-        else:
-            return False
-
-    def _relaxes(self) -> None:
-        if abs(self._devmgr(Joint, "/leg/ankle").angle) < self.RELAXING_ANGLE:
-            return True
-        else:
-            return False
-
-
 class DevMgrThread(Thread):
     def __init__(self, devmgr: DeviceManager, comsrv: ComServer):
         super().__init__()
+        self.name = "DevMgrThread"
+
         self._devmgr = devmgr
         self._msgsrv: RPCMsgServer = RPCMsgServer(
-            devmgr, comsrv, subscription=("GET", "SET", "CALL")
+            devmgr, comsrv, subscription=("GET", "SET", "CALL", "CMD")
         )
+        self._log = self._devmgr.getLogger(self.name)
+        self._log.info(f"Init {self.name}")
+        self._devmgr.get("/leg").initStateMachine([InitMode, LevelMode])
         self._stop_event = Event()
-        self._stopped_event = Event()
-        self._exit_event = Event()
-        self._start_event = Event()
-        self._started_event = Event()
 
     def run(self):
-        while True:
-            if self._start_event.wait(timeout=0.1):
-                self._start_event.clear()
-                ## We got the start event, enter the devmgr context manager
+        self._log.info(f"Starting {self.name}")
+        with self._msgsrv as msgsrv:
+            while True:
                 try:
-                    with self._devmgr as devmgr, self._msgsrv as msgsrv:
-                        self._stopped_event.clear()
-                        self._started_event.set()
-                        for time, tick in devmgr.clock:
-                            if self._stop_event.is_set():
-                                break
-                            devmgr.update()
-                            msgsrv.process()
+                    msg = msgsrv.get(timeout=1)
+                    match msg.type, msg.data:
+                        case ["CMD", "START"]:
+                            msgsrv.ack(msg)
+                            break
+                        case _:
+                            err = RuntimeError("Unknown command")
+                            msgsrv.nack(msg, err)
+
+                except Empty:
+                    pass
                 except Exception as e:
                     traceback.print_exc()
-                    self._stop_event.set()
-                    self._exit_event.set()
-                    self._stopped_event.set()
-                    self._started_event.clear()
+                    return
+                finally:
+                    if self._stop_event.is_set():
+                        break
 
-                self._stop_event.clear()
-                self._stopped_event.set()
-                self._started_event.clear()
-            else:
-                # Timeout, check if we should exit for some reason.
-                if self._exit_event.is_set():
-                    break
+            with self._devmgr as devmgr:
+                for time, tick in devmgr.clock:
+                    if self._stop_event.is_set():
+                        break
+                    devmgr.update()
+                    for unhandled_msg in msgsrv.process():
+                        match unhandled_msg.type, unhandled_msg.data:
+                            case ["CMD", "STOP"]:
+                                msgsrv.ack(unhandled_msg)
+                                self._stop_event.set()
+                            case ["CMD", "START"]:
+                                msgsrv.nack(
+                                    unhandled_msg,
+                                    RuntimeError("OSL is already started"),
+                                )
+                            case _:
+                                msgsrv.nack(
+                                    unhandled_msg, RuntimeError("Unknown command")
+                                )
 
-    def __enter__(self):
-        self.start()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.exit()
-
-    def start_devmgr(self, timeout=1) -> bool:
-        self._start_event.set()
-        return self._started_event.wait(timeout)
-
-    def stop_devmgr(self, timeout=1) -> bool:
+    def stop(self):
+        self._log.info(f"Recived stop signal")
         self._stop_event.set()
-        return self._stopped_event.wait(timeout)
-
-    def exit(self, timeout: float = 2):
-        self._exit_event.set()
-        self._stop_event.set()
-        self.join(timeout)
-
-
-def signal_handler(sig, frame):
-    print(f"SIGINT received")
-    raise KeyboardInterrupt
+        self.join()
 
 
 if __name__ == "__main__":
 
-    HOSTNAME = "nb-rpi-100"
+    def signal_handler(sig, frame):
+        raise KeyboardInterrupt
 
-    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
     ## Init DeviceManager, ComServer and MsgServer
 
     comserver = ComServer()
@@ -288,41 +175,19 @@ if __name__ == "__main__":
     )
 
     # Load the states into the OSL device
-    osl.initStateMachine([InitMode, LevelMode])
 
-    msgsrv = MsgServer(devmgr, comserver, subscription=("CMD"))
-    t_osl: DevMgrThread = DevMgrThread(devmgr, comserver)
-
-    with comserver, msgsrv, t_osl:
+    with comserver:
         while True:
             try:
-                msg = msgsrv.get(timeout=1)
-                match msg.data:
-                    case "START":
-                        if t_osl.start_devmgr():
-                            msgsrv.ack(msg)
-                        else:
-                            err = RuntimeError("DevMgrThread did not respond to start")
-                            msgsrv.nack(msg, err)
-                    case "STOP":
-                        if t_osl.stop_devmgr():
-                            msgsrv.ack(msg)
-                        else:
-                            err = RuntimeError("DevMgrThread did not respond to stop")
-                            msgsrv.nack(msg, err)
-                    case "EXIT":
-                        msgsrv.ack(msg)
-                        break
-                    case _:
-                        err = ValueError("Unknown command")
-                        msgsrv.nack(msg, err)
-                        continue
-            except Empty:
-                continue
+                devmgr_thread: DevMgrThread = DevMgrThread(devmgr, comserver)
+                devmgr_thread.start()
+                while devmgr_thread.is_alive():
+                    devmgr_thread.join(timeout=1)
+                print("I died")
             except KeyboardInterrupt:
-                print("Keyboard interrupt")
+                devmgr._log.warning("KeyboardInterrupt")
+                devmgr_thread.stop()
                 break
             except Exception as e:
                 traceback.print_exc()
                 break
-    print("Exited with block")

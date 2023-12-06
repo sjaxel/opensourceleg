@@ -4,6 +4,7 @@ import json
 from abc import ABCMeta
 from dataclasses import dataclass
 
+
 class Gains:
     pass
 

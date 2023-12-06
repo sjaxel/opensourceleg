@@ -3,8 +3,8 @@ from typing import Self
 import traceback
 from queue import Empty, Queue
 
-from opensourceleg.com_protocol import OSLMsg
-from opensourceleg.com_server import ComServer
+from opensourceleg.com.protocol import OSLMsg
+from opensourceleg.com.server import ComServer
 from opensourceleg.device import DeviceManager
 
 
@@ -64,6 +64,18 @@ class RPCMsgServer(MsgServer):
         super().__init__(devmgr, comsrv, subscription, log_level)
 
     def process(self, timeout: float = None) -> [OSLMsg]:
+        """Process all RPC messages in the queue and return unhandled messages
+
+        Args:
+            timeout (float, optional): Timeout for get. Defaults to None.
+
+        Returns:
+            [OSLMsg]: Unhandled messages
+
+        Raises:
+            Empty: Queue is empty
+
+        """
         unhandles_msgs = []
         while True:
             try:
@@ -94,77 +106,54 @@ class RPCMsgServer(MsgServer):
         """
         msg.uid = n
         msg.type = "GET"
-        msg.data = {
-            "path1": {
-                "attr1": res1,
-                "attr2": res2
-            },
-            "path2": {
-                "attr1": res1,
-                "attr2": res2
-            }
-        }
+        msg.data = [
+            {path: path1, attr: attr1},
+            {path: path2, attr: attr2},
+            {...}
+        ]
         """
-        for path in msg.data.keys():
-            device = self._devmgr.get(path)
-            for attr in msg.data[path]:
-                self._log.info(f"GET {path}.{attr}")
-                msg.data[path][attr] = getattr(device, attr)
-                res = getattr(self._devmgr.get(path), attr)
+        for pc in msg.data:
+            device = self._devmgr.get(pc["path"])
+            self._log.info(f"GET {pc['path']}.{pc['attr']}")
+            pc["res"] = getattr(device, pc["attr"])
 
     def _process_call(self, msg: OSLMsg) -> None:
         """
         msg = {
             "uid": n
             "type": "CALL"
-            "data": {
-                "path1": {
-                    "method1": {
-                        "args": [arg1, arg2],
-                        "kwargs": {
-                            "kwarg1": kwarg1,
-                            "kwarg2": kwarg2
-                        }
-                    },
-                    "res": res1,
-                },
-                "path2": {...}
-            }
+            "data": [
+                {path: path1, method: method1, args: [args1], kwargs: {kwargs1}},
+                {path: path2, method: method2, args: [args2], kwargs: {kwargs2}},
+                {...}
+            ]
         }
         """
-        for path in msg.data.keys():
-            self._log.info(f"CALL data: {msg.data}")
-            device = self._devmgr.get(path)
-            for method in msg.data[path]:
-                self._log.info(f"Method {method}")
-                args = msg.data[path][method]["args"]
-                kwargs = msg.data[path][method]["kwargs"]
-                self._log.info(f"CALL {path}.{method}({args}, {kwargs})")
-                res = getattr(device, method)(*args, **kwargs)
-                msg.data[path][method]["res"] = res
+        for pc in msg.data:
+            self._log.info(f"CALL data: {pc}")
+            device = self._devmgr.get(pc["path"])
+            args = pc.get("args", [])
+            kwargs = pc.get("kwargs", {})
+            self._log.info(f"CALL {pc['path']}.{pc['method']}({args}, {kwargs})")
+            res = getattr(device, pc["method"])(*args, **kwargs)
+            pc["res"] = res
 
     def _process_set(self, msg: OSLMsg) -> None:
         """
         msg = {
             "uid": n
             "type": "SET"
-            "data": {
-                "path1": {
-                    "attr1": val1,
-                    "attr2": val2
-                },
-                "path2": {
-                    "attr1": val1,
-                    "attr2": val2
-                }
-            }
+            "data": [
+                {path: path1, attr: attr1, value: value1},
+                {path: path2, attr: attr2, value: value2},
+                {...}
+            ]
         }
         """
-        for path in msg.data.keys():
-            device = self._devmgr.get(path)
-            for attr in msg.data[path]:
-                self._log.info(f"SET {path}.{attr} = {msg.data[path][attr]}")
-                setattr(device, attr, msg.data[path][attr])
+        for pc in msg.data:
+            device = self._devmgr.get(pc["path"])
+            self._log.info(f"SET {pc['path']}.{pc['attr']} = {pc['value']}")
+            setattr(device, pc["attr"], pc["value"])
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import socket
 from pprint import pprint
 from time import perf_counter, sleep, time
 
-from com_protocol import OSLMsg, SocketIOFrame
+from opensourceleg.com.protocol import OSLMsg, SocketIOFrame
 
 DEFAULT_HOST = "nb-rpi-100"
 DEFAULT_PORT = 65431
@@ -18,6 +18,7 @@ class RemoteOSL:
         self._host: str = host
         self._port: int = port
         self._socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.settimeout(2)
         self._connected: bool = False
 
     def __enter__(self) -> "RemoteOSL":
@@ -34,14 +35,18 @@ class RemoteOSL:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.send_command("STOP")
-        self._socket.close()
-        self._connected = False
-        if isinstance(exc_value, KeyboardInterrupt):
-            # Handle IndexError here...
-            print("[Client] User requested exit, closing socket")
-            print(f"[Client] Disconnected from {self._host}:{self._port}")
-            return True
+        try:
+            self.send_command("STOP")
+        except Exception as e:
+            print(str(e))
+        finally:
+            self._socket.close()
+            self._connected = False
+            if isinstance(exc_value, KeyboardInterrupt):
+                # Handle IndexError here...
+                print("[Client] User requested exit, closing socket")
+                print(f"[Client] Disconnected from {self._host}:{self._port}")
+                return True
 
     def _send(self, msg: OSLMsg):
         if not self._connected:
@@ -84,17 +89,21 @@ class DeviceProxy:
         return super().__getattribute__(attr)
 
     def __getattr__(self, attr: str) -> Any:
-        msg = OSLMsg(0, "GET", {self._path: {attr: None}})
+        msg = OSLMsg(0, "GET", [{"path": self._path, "attr": attr}])
         self._remote_osl._send(msg)
-        return self._remote_osl._recv().data[self._path][attr]
+        return self._remote_osl._recv().data[0]["res"]
 
-    def __setattr__(self, attr: str, value):
-        msg = OSLMsg(0, "SET", {self._path: {attr: value}})
+    def __setattr__(self, attr: str, value: Any):
+        msg = OSLMsg(0, "SET", [{"path": self._path, "attr": attr, "value": value}])
         self._remote_osl._send(msg)
         return self._remote_osl._recv()
 
-    def call(self, attr: str, *args, **kwargs):
-        msg = OSLMsg(0, "CALL", {self._path: {attr: {"args": args, "kwargs": kwargs}}})
+    def call(self, method: str, *args, **kwargs):
+        msg = OSLMsg(
+            0,
+            "CALL",
+            [{"path": self._path, "method": method, "args": args, "kwargs": kwargs}],
+        )
         self._remote_osl._send(msg)
         return self._remote_osl._recv()
 
@@ -123,8 +132,10 @@ if __name__ == "__main__":
                 (cmd, *args) = cmd.split(" ")
 
                 match cmd:
+                    case "stop":
+                        osl.send_command("STOP")
                     case "exit":
-                        exit(0)
+                        break
                     case "start":
                         osl.send_command("START")
                     case "set":
@@ -167,5 +178,12 @@ if __name__ == "__main__":
                     case _:
                         print("Unknown command")
                 continue
+            except TimeoutError:
+                print("[Client] Timeout")
+                continue
+            except ValueError as e:
+                if str(e) == "Expected ACK message, got NACK":
+                    print("[Client] NACK")
+                    continue
             except Exception as e:
                 raise e
