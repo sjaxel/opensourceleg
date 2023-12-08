@@ -105,6 +105,7 @@ class RPCMsgParser(MsgParser):
         """
         for pc in msg.data:
             device = self._devmgr.get(pc["path"])
+            print(f"SET {pc['path']}.{pc['attr']} = {pc['value']}")
             # self._log.info(f"SET {pc['path']}.{pc['attr']} = {pc['value']}")
             setattr(device, pc["attr"], pc["value"])
 

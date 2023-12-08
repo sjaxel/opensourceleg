@@ -22,6 +22,11 @@ class UserConfig(TypedDict):
     weight: float
 
 
+class StreamConfig(TypedDict):
+    attributes: list[dict[str, str]]
+
+
 class OSLConfig(TypedDict):
     user: UserConfig
     states: StatesConfig
+    stream: StreamConfig

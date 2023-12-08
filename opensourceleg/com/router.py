@@ -154,6 +154,7 @@ class Router(Thread):
         if self._channels[ch] is not None and self._channels[ch] != queue:
             self._log.warning(f"Overwriting queue for {ch}")
         self._channels[ch] = queue
+        self._log.info(f"Subscribed {queue} to {ch}")
 
     def unsubscribe(self, queue: Queue, ch: Channel | None = None) -> None:
         if ch is None:
@@ -172,7 +173,7 @@ class Router(Thread):
                 except Full:
                     self._log.warning(f"Tx queue for {conn} is full")
                 else:
-                    self._log.info(f"Sent {msg} to {conn}")
+                    self._log.debug(f"Sent {msg} to {conn}")
                 finally:
                     ## This means that we only to to send to one active connection
                     ## if one is found.

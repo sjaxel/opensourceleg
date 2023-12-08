@@ -1,7 +1,7 @@
 {
     "user": {
-        "height": 190,
-        "weight": 78
+        "height": 1.0,
+        "weight": 1.0
     },
     "states": {
         "init": {
@@ -148,5 +148,17 @@
                 }
             }
         }
+    },
+    "stream": {
+        "attributes": [
+            {
+                "path": "/leg",
+                "attr": "state"
+            },
+            {
+                "path": "/leg",
+                "attr": "load"
+            }
+        ]
     }
 }

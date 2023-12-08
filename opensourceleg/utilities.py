@@ -159,6 +159,9 @@ class SoftRealtimeLoop:
     def time_since(self):
         return time.time() - self.t1
 
+    def current_tick(self) -> tuple[int, float]:
+        return (int(self.n), (self.t1 - self.t0))
+
     def __iter__(self):
         self.t0 = self.t1 = time.time() + self.dt
         return self

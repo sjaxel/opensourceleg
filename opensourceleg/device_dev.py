@@ -19,6 +19,7 @@ from opensourceleg.actpack import (
 from opensourceleg.com.msgparser import ComPacket, OSLMsg, RPCMsgParser
 from opensourceleg.com.router import Channel, Endpoint, Router
 from opensourceleg.com.server import ComServer
+from opensourceleg.com.stream import StreamServer
 from opensourceleg.device import DeviceManager
 from opensourceleg.drivers.TMotor import TMotorActpack
 from opensourceleg.encoder import AS5048A_Encoder
@@ -43,11 +44,12 @@ class DevMgrThread(Thread):
         self._log.info(f"Init {self.name}")
         self._devmgr.get("/leg").initStateMachine([InitMode, LevelMode])
         self._stop_event = Event()
+        self._stream_server: StreamServer | None = None
 
     def run(self):
         self._log.info(f"Starting {self.name}")
         self._endpoint.subscribe(Channel.RPC)
-        self._endpoint.subscribe(Channel.STREAM)
+        self._stream_server = StreamServer(self._devmgr, self._router)
         pkt: ComPacket
 
         while True:
@@ -64,10 +66,12 @@ class DevMgrThread(Thread):
                 pass
             except Exception as e:
                 traceback.print_exc()
+                self._cleanup()
                 return
             finally:
                 if self._stop_event.is_set():
-                    break
+                    self._cleanup()
+                    return
 
         with self._devmgr as devmgr:
             self._log.info(f"Starting OSL device manager")
@@ -91,29 +95,17 @@ class DevMgrThread(Thread):
                                 RuntimeError(f"Unknown command {pkt}"), block=False
                             )
 
-                ## Process any stream control messages
+                ## Process stream messages
                 try:
-                    for pkt in self._router.get(Channel.STREAM, block=False):
-                        self._log.info(f"Got stream control message {pkt}")
-                except Empty:
-                    pass
+                    self._stream_server.process()
+                except Exception as e:
+                    traceback.print_exc()
+                    break
 
-                ## Transmit data stream messages
-
-                if self._router.has_active(Channel.STREAM):
-                    msg = OSLMsg(uid=tick, type="STREAM", data="LOTS OF STREAM DATA")
-                    try:
-                        self._router.outbound(msg, Channel.STREAM)
-                    except Full:
-                        self._log.warning(
-                            f"Stream channel full, dropping message {msg}"
-                        )
-                    except Exception as e:
-                        self._log.error(f"Error sending stream message {msg}: {e}")
-        self._log.info(f"[EXIT]]")
         self._cleanup()
 
     def _cleanup(self):
+        self._log.info(f"[EXIT]]")
         del self._endpoint
 
     def stop(self):
@@ -131,7 +123,7 @@ if __name__ == "__main__":
     ## Init DeviceManager, ComServer and MsgServer
 
     devmgr = DeviceManager()
-    devmgr.frequency = 80
+    devmgr.frequency = 10
 
     router = Router(log_level="DEBUG")
     comserver = ComServer(router)
