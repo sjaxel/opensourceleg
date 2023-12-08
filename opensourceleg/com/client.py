@@ -13,12 +13,55 @@ DEFAULT_HOST = "nb-rpi-100"
 DEFAULT_PORT = 65431
 
 
+class StreamClient:
+    def __init__(self) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._addr = (None, None)
+
+    def __enter__(self):
+        self._sock.connect((DEFAULT_HOST, DEFAULT_PORT))
+        print(f"[StreamClient] Connected {self}")
+        msg = OSLMsg(0, "ROUT", {"channel": "STREAM"})
+        self._send(msg)
+        msg = self._recv()
+        if msg.type != "ACK":
+            raise ValueError(f"Expected ACK message, got {msg.type}")
+        else:
+            print(f"[StreamClient] -> {msg}")
+        print(f"[StreamClient] [CONNECTED]")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        print(f"[StreamClient] Disconnected {self}")
+        self._sock.close()
+        if isinstance(exc_value, KeyboardInterrupt):
+            print("[StreamClient] User requested exit, closing socket")
+            return True
+        elif isinstance(exc_value, Exception):
+            print(f"[StreamClient] Exception: {exc_value}")
+        return True
+
+    def _send(self, msg: OSLMsg):
+        payload = SocketIOFrame.encode(msg)
+        self._sock.sendall(payload)
+
+    def _recv(self) -> OSLMsg:
+        buffer = bytearray()
+        buffer += self._sock.recv(2048)
+        messages, buffer = SocketIOFrame.decode(buffer)
+        if len(messages) != 1:
+            raise ValueError(f"Expected 1 message, got {len(messages)}")
+        return messages[0]
+
+    def __str__(self) -> str:
+        return f"StreamClient({self._addr[0]}:{self._addr[1]})"
+
+
 class RemoteOSL:
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self._host: str = host
         self._port: int = port
         self._socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.settimeout(2)
         self._connected: bool = False
 
     def __enter__(self) -> "RemoteOSL":
@@ -148,6 +191,18 @@ if __name__ == "__main__":
                         (method, *args) = args
                         # TODO Parse and handle args/kwargs
                         device.call(method)
+                    case "stream":
+                        with StreamClient() as stream:
+                            while True:
+                                try:
+                                    msg = stream._recv()
+                                    print(f"[StreamClient] {msg}")
+                                except TimeoutError:
+                                    print("[StreamClient] Timeout")
+                                    continue
+                                except Exception as e:
+                                    print(f"[StreamClient] {e}")
+                                    break
                     case "set_device":
                         device = DeviceProxy(OSLDevice, args[0], osl)
                     case "get_config":

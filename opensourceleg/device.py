@@ -202,6 +202,10 @@ class DeviceManager:
         return DeviceManager._lock
 
     @property
+    def started(self) -> bool:
+        return DeviceManager._lock
+
+    @property
     def cwd(self) -> DevicePath:
         return self._cwd
 

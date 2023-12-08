@@ -2,7 +2,7 @@ from typing import Any, ClassVar
 
 import signal
 import traceback
-from queue import Empty
+from queue import Empty, Full
 from threading import Event, Thread
 
 from numpy import deg2rad
@@ -16,7 +16,8 @@ from opensourceleg.actpack import (
     ImpedenceMode,
     SpeedMode,
 )
-from opensourceleg.com.msgserver import MsgServer, RPCMsgServer
+from opensourceleg.com.msgparser import ComPacket, OSLMsg, RPCMsgParser
+from opensourceleg.com.router import Channel, Router
 from opensourceleg.com.server import ComServer
 from opensourceleg.device import DeviceManager
 from opensourceleg.drivers.TMotor import TMotorActpack
@@ -30,14 +31,13 @@ from opensourceleg.state_machine import OSLState
 
 
 class DevMgrThread(Thread):
-    def __init__(self, devmgr: DeviceManager, comsrv: ComServer):
+    def __init__(self, devmgr: DeviceManager, router: Router):
         super().__init__()
         self.name = "DevMgrThread"
 
         self._devmgr = devmgr
-        self._msgsrv: RPCMsgServer = RPCMsgServer(
-            devmgr, comsrv, subscription=("GET", "SET", "CALL", "CMD")
-        )
+        self._router = router
+        self._msgparser = RPCMsgParser(devmgr, router)
         self._log = self._devmgr.getLogger(self.name)
         self._log.info(f"Init {self.name}")
         self._devmgr.get("/leg").initStateMachine([InitMode, LevelMode])
@@ -45,46 +45,68 @@ class DevMgrThread(Thread):
 
     def run(self):
         self._log.info(f"Starting {self.name}")
-        with self._msgsrv as msgsrv:
-            while True:
-                try:
-                    msg = msgsrv.get(timeout=1)
-                    match msg.type, msg.data:
-                        case ["CMD", "START"]:
-                            msgsrv.ack(msg)
-                            break
-                        case _:
-                            err = RuntimeError("Unknown command")
-                            msgsrv.nack(msg, err)
+        pkt: ComPacket
 
+        while True:
+            try:
+                pkt = self._router.get(Channel.RPC, block=False)
+                match pkt.msg.type, pkt.msg.data:
+                    case ["CMD", "START"]:
+                        pkt.ack(block=False)
+                        break
+                    case _:
+                        err = RuntimeError("Unknown command")
+                        pkt.nack(err, block=False)
+            except Empty | Full:
+                pass
+            except Exception as e:
+                traceback.print_exc()
+                return
+            finally:
+                if self._stop_event.is_set():
+                    break
+
+        with self._devmgr as devmgr:
+            self._log.info(f"Starting OSL device manager")
+            for tick, time in devmgr.clock:
+                ## Check if we should stop
+                if self._stop_event.is_set():
+                    break
+                ## Update the device manager
+                devmgr.update()
+
+                ## Process incoming RPC messages
+                for pkt in self._msgparser.process():
+                    match pkt.msg.type, pkt.msg.data:
+                        case ["CMD", "STOP"]:
+                            pkt.ack(block=False)
+                            self._stop_event.set()
+                        case ["CMD", "START"]:
+                            pkt.nack(RuntimeError("Already started"), block=False)
+                        case _:
+                            pkt.nack(
+                                RuntimeError(f"Unknown command {pkt}"), block=False
+                            )
+
+                ## Process any stream control messages
+                try:
+                    for pkt in self._router.get(Channel.STREAM, block=False):
+                        self._log.info(f"Got stream control message {pkt}")
                 except Empty:
                     pass
-                except Exception as e:
-                    traceback.print_exc()
-                    return
-                finally:
-                    if self._stop_event.is_set():
-                        break
 
-            with self._devmgr as devmgr:
-                for time, tick in devmgr.clock:
-                    if self._stop_event.is_set():
-                        break
-                    devmgr.update()
-                    for unhandled_msg in msgsrv.process():
-                        match unhandled_msg.type, unhandled_msg.data:
-                            case ["CMD", "STOP"]:
-                                msgsrv.ack(unhandled_msg)
-                                self._stop_event.set()
-                            case ["CMD", "START"]:
-                                msgsrv.nack(
-                                    unhandled_msg,
-                                    RuntimeError("OSL is already started"),
-                                )
-                            case _:
-                                msgsrv.nack(
-                                    unhandled_msg, RuntimeError("Unknown command")
-                                )
+                ## Transmit data stream messages
+
+                if self._router.has_active(Channel.STREAM):
+                    msg = OSLMsg(uid=tick, type="STREAM", data="LOTS OF STREAM DATA")
+                    try:
+                        self._router.outbound(msg, Channel.STREAM)
+                    except Full:
+                        self._log.warning(
+                            f"Stream channel full, dropping message {msg}"
+                        )
+                    except Exception as e:
+                        self._log.error(f"Error sending stream message {msg}: {e}")
 
     def stop(self):
         self._log.info(f"Recived stop signal")
@@ -100,10 +122,11 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     ## Init DeviceManager, ComServer and MsgServer
 
-    comserver = ComServer()
-
     devmgr = DeviceManager()
     devmgr.frequency = 80
+
+    router = Router(log_level="DEBUG")
+    comserver = ComServer(router)
 
     ## Init the hardware devices
 
@@ -176,10 +199,10 @@ if __name__ == "__main__":
 
     # Load the states into the OSL device
 
-    with comserver:
+    with comserver, router:
         while True:
             try:
-                devmgr_thread: DevMgrThread = DevMgrThread(devmgr, comserver)
+                devmgr_thread: DevMgrThread = DevMgrThread(devmgr, router)
                 devmgr_thread.start()
                 while devmgr_thread.is_alive():
                     devmgr_thread.join(timeout=1)
