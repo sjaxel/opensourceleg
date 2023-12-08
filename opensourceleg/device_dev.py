@@ -17,7 +17,7 @@ from opensourceleg.actpack import (
     SpeedMode,
 )
 from opensourceleg.com.msgparser import ComPacket, OSLMsg, RPCMsgParser
-from opensourceleg.com.router import Channel, Router
+from opensourceleg.com.router import Channel, Endpoint, Router
 from opensourceleg.com.server import ComServer
 from opensourceleg.device import DeviceManager
 from opensourceleg.drivers.TMotor import TMotorActpack
@@ -37,6 +37,7 @@ class DevMgrThread(Thread):
 
         self._devmgr = devmgr
         self._router = router
+        self._endpoint = Endpoint(router)
         self._msgparser = RPCMsgParser(devmgr, router)
         self._log = self._devmgr.getLogger(self.name)
         self._log.info(f"Init {self.name}")
@@ -45,11 +46,13 @@ class DevMgrThread(Thread):
 
     def run(self):
         self._log.info(f"Starting {self.name}")
+        self._endpoint.subscribe(Channel.RPC)
+        self._endpoint.subscribe(Channel.STREAM)
         pkt: ComPacket
 
         while True:
             try:
-                pkt = self._router.get(Channel.RPC, block=False)
+                pkt = self._endpoint.get(timeout=0.1)
                 match pkt.msg.type, pkt.msg.data:
                     case ["CMD", "START"]:
                         pkt.ack(block=False)
@@ -57,7 +60,7 @@ class DevMgrThread(Thread):
                     case _:
                         err = RuntimeError("Unknown command")
                         pkt.nack(err, block=False)
-            except Empty | Full:
+            except (Empty, Full):
                 pass
             except Exception as e:
                 traceback.print_exc()
@@ -107,6 +110,11 @@ class DevMgrThread(Thread):
                         )
                     except Exception as e:
                         self._log.error(f"Error sending stream message {msg}: {e}")
+        self._log.info(f"[EXIT]]")
+        self._cleanup()
+
+    def _cleanup(self):
+        del self._endpoint
 
     def stop(self):
         self._log.info(f"Recived stop signal")

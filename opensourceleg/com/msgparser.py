@@ -3,23 +3,21 @@ from typing import Self
 import traceback
 from queue import Empty, Queue
 
-from opensourceleg.com.router import Channel, ComPacket, OSLMsg, Router
+from opensourceleg.com.router import Channel, ComPacket, Endpoint, OSLMsg, Router
 from opensourceleg.device import DeviceManager
 
 
 class MsgParser:
-    def __init__(self, router: Router) -> None:
+    _endpoint: Endpoint
+
+    def __init__(self, endpoint: Endpoint) -> None:
         super().__init__()
-        self._router: Router = router
+        self._endpoint: Endpoint = endpoint
 
 
 class RPCMsgParser(MsgParser):
-    def __init__(
-        self,
-        devmgr: DeviceManager,
-        router: Router,
-    ) -> None:
-        super().__init__(router)
+    def __init__(self, devmgr: DeviceManager, endpoint: Endpoint) -> None:
+        super().__init__(endpoint)
         self._devmgr: DeviceManager = devmgr
 
     def process(self, block: bool = True, timeout: float | None = None) -> [ComPacket]:
@@ -38,7 +36,7 @@ class RPCMsgParser(MsgParser):
         unhandles_msgs = []
         while True:
             try:
-                pkt = self._router.get(Channel.RPC, block=False)
+                pkt: ComPacket = self._endpoint.get(Channel.RPC, block=False)
                 match pkt.msg.type:
                     case "GET":
                         self._process_get(pkt.msg)
@@ -69,7 +67,7 @@ class RPCMsgParser(MsgParser):
         """
         for pc in msg.data:
             device = self._devmgr.get(pc["path"])
-            self._log.info(f"GET {pc['path']}.{pc['attr']}")
+            # self._log.info(f"GET {pc['path']}.{pc['attr']}")
             pc["res"] = getattr(device, pc["attr"])
 
     def _process_call(self, msg: OSLMsg) -> None:
@@ -85,11 +83,11 @@ class RPCMsgParser(MsgParser):
         }
         """
         for pc in msg.data:
-            self._log.info(f"CALL data: {pc}")
+            # self._log.info(f"CALL data: {pc}")
             device = self._devmgr.get(pc["path"])
             args = pc.get("args", [])
             kwargs = pc.get("kwargs", {})
-            self._log.info(f"CALL {pc['path']}.{pc['method']}({args}, {kwargs})")
+            # self._log.info(f"CALL {pc['path']}.{pc['method']}({args}, {kwargs})")
             res = getattr(device, pc["method"])(*args, **kwargs)
             pc["res"] = res
 
@@ -107,7 +105,7 @@ class RPCMsgParser(MsgParser):
         """
         for pc in msg.data:
             device = self._devmgr.get(pc["path"])
-            self._log.info(f"SET {pc['path']}.{pc['attr']} = {pc['value']}")
+            # self._log.info(f"SET {pc['path']}.{pc['attr']} = {pc['value']}")
             setattr(device, pc["attr"], pc["value"])
 
 

@@ -77,10 +77,12 @@ class Router(Thread):
         self._log.setLevel(log_level)
         self._exit_evt: Event = Event()
 
-        self._outbound_queues: dict[Channel, Queue[OSLMsg] | None] = {}
-        self._channels: dict[Channel, Queue[ComPacket]] = {}
+        self._channels: dict[Channel, Queue[ComPacket] | None] = {}
         for ch in Channel:
-            self._channels[ch] = Queue()
+            self._channels[ch] = None
+
+        self.endpoint: Endpoint = Endpoint(self)
+        self.endpoint.subscribe(Channel.ROUTER)
 
     def __enter__(self):
         self._log.debug("[ENTER]")
@@ -101,10 +103,9 @@ class Router(Thread):
         self._exit_evt.set()
 
     def run(self):
-        router_queue = self._channels[Channel.ROUTER]
         while True:
             try:
-                pkt: ComPacket = router_queue.get(block=True, timeout=0.1)
+                pkt: ComPacket = self.endpoint.get(block=True, timeout=0.1)
                 self._log.info(f"Processing {pkt}")
                 try:
                     self._process_rout(pkt)
@@ -119,6 +120,10 @@ class Router(Thread):
             finally:
                 if self._exit_evt.is_set():
                     break
+
+        ## Flush router queue
+        self.endpoint.unsubscribe_all()
+        self.endpoint.flush()
         self._log.info("[STOP]")
 
     def inbound(self, pkt: ComPacket) -> None:
@@ -128,16 +133,36 @@ class Router(Thread):
             return
         except Full:
             self._log.warning(f"Rx queue for {ch} is full")
-            pkt.nack(Exception(f"Rx queue for {ch} is full"), block=False)
+            pkt.nack(ConnectionRefusedError(f"Rx queue for {ch} is full"), block=False)
         except KeyError:
             self._log.warning(f"Unknown message type {pkt.msg.type}")
-            pkt.nack(Exception(f"Unknown message type {pkt.msg.type}"), block=False)
+            pkt.nack(ValueError(f"Unknown message type {pkt.msg.type}"), block=False)
+        except AttributeError:
+            self._log.warning(f"No active route for {pkt.msg.type}")
+            pkt.nack(
+                ConnectionRefusedError(f"No active route for {pkt.msg.type}"),
+                block=False,
+            )
 
     def has_active(self, ch: Channel) -> bool:
         for conn in ComConnection._active:
             if ch in conn.channel:
                 return True
         return False
+
+    def subscribe(self, queue: Queue, ch: Channel) -> None:
+        if self._channels[ch] is not None and self._channels[ch] != queue:
+            self._log.warning(f"Overwriting queue for {ch}")
+        self._channels[ch] = queue
+
+    def unsubscribe(self, queue: Queue, ch: Channel | None = None) -> None:
+        if ch is None:
+            for ch in Channel:
+                if self._channels[ch] == queue:
+                    self._channels[ch] = None
+        else:
+            if self._channels[ch] == queue:
+                self._channels[ch] = None
 
     def outbound(self, msg: OSLMsg, ch: Channel) -> None:
         for conn in ComConnection._active:
@@ -183,6 +208,57 @@ class Router(Thread):
             pkt.nack(e, block=False)
         else:
             pkt.ack(block=False)
+
+
+class Endpoint:
+    DEFAULT_QUEUE_SIZE: ClassVar[int] = 10
+
+    def __init__(self, router: Router, queue_size: int = DEFAULT_QUEUE_SIZE) -> None:
+        super().__init__()
+        self._router = router
+        self._pkt_queue: Queue[ComPacket] = Queue(maxsize=queue_size)
+
+    def subscribe(self, *ch: Channel) -> None:
+        for c in ch:
+            self._router.subscribe(self._pkt_queue, c)
+
+    def unsubscribe(self, *ch: Channel) -> None:
+        for c in ch:
+            self._router.unsubscribe(self._pkt_queue, c)
+
+    def unsubscribe_all(self) -> None:
+        self._router.unsubscribe(self._pkt_queue)
+
+    def has_subsciption(self) -> bool:
+        for queue in self._router._channels.values():
+            if queue == self._pkt_queue:
+                return True
+        return False
+
+    def get(self, block: bool = True, timeout: float | None = None) -> ComPacket:
+        """Get a packet from the enpoint queue
+
+        Args:
+            block (bool, optional): If True, block until a packet is available. Defaults to True.
+            timeout (float | None, optional): If block is True, the timeout in seconds. Defaults to None.
+
+        Raises:
+            Empty: If the queue is empty (block=False or timeout expired)
+        """
+        return self._pkt_queue.get(block, timeout)
+
+    def flush(self) -> None:
+        """Flush the queue"""
+        while True:
+            try:
+                pkt = self._pkt_queue.get(block=False)
+                pkt.nack(Exception("Endpoint closed"), block=False)
+            except Exception:
+                break
+
+    def __del__(self) -> None:
+        self.unsubscribe_all()
+        self.flush()
 
 
 class ComConnection:
